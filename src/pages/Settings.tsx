@@ -1,0 +1,372 @@
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import { Mail, MessageSquare, CheckCircle, AlertCircle, Save, Server } from 'lucide-react';
+
+interface Configuration {
+  id: string;
+  config_type: string;
+  config_name: string;
+  config_data: any;
+  is_active: boolean;
+}
+
+export function Settings() {
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const [emailConfig, setEmailConfig] = useState({
+    smtp_host: '',
+    smtp_port: '',
+    smtp_username: '',
+    smtp_password: '',
+    from_email: '',
+    from_name: '',
+    encryption: 'tls'
+  });
+
+  const [smsConfig, setSmsConfig] = useState({
+    provider: 'twilio',
+    api_key: '',
+    api_secret: '',
+    sender_id: '',
+    api_url: ''
+  });
+
+  useEffect(() => {
+    fetchConfigurations();
+  }, []);
+
+  const fetchConfigurations = async () => {
+    try {
+      const { data: emailData } = await supabase
+        .from('system_configurations')
+        .select('*')
+        .eq('config_type', 'email')
+        .eq('config_name', 'smtp')
+        .maybeSingle();
+
+      if (emailData) {
+        setEmailConfig(emailData.config_data);
+      }
+
+      const { data: smsData } = await supabase
+        .from('system_configurations')
+        .select('*')
+        .eq('config_type', 'sms')
+        .eq('config_name', 'provider')
+        .maybeSingle();
+
+      if (smsData) {
+        setSmsConfig(smsData.config_data);
+      }
+    } catch (error: any) {
+      console.error('Error fetching configurations:', error);
+    }
+  };
+
+  const handleEmailConfigSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setMessage(null);
+
+    try {
+      const { data: existing } = await supabase
+        .from('system_configurations')
+        .select('id')
+        .eq('config_type', 'email')
+        .eq('config_name', 'smtp')
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase
+          .from('system_configurations')
+          .update({
+            config_data: emailConfig,
+            updated_by: user?.id,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existing.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('system_configurations')
+          .insert({
+            config_type: 'email',
+            config_name: 'smtp',
+            config_data: emailConfig,
+            created_by: user?.id,
+            updated_by: user?.id
+          });
+
+        if (error) throw error;
+      }
+
+      setMessage({ type: 'success', text: 'Email configuration saved successfully!' });
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'Failed to save email configuration' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSmsConfigSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setMessage(null);
+
+    try {
+      const { data: existing } = await supabase
+        .from('system_configurations')
+        .select('id')
+        .eq('config_type', 'sms')
+        .eq('config_name', 'provider')
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase
+          .from('system_configurations')
+          .update({
+            config_data: smsConfig,
+            updated_by: user?.id,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existing.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('system_configurations')
+          .insert({
+            config_type: 'sms',
+            config_name: 'provider',
+            config_data: smsConfig,
+            created_by: user?.id,
+            updated_by: user?.id
+          });
+
+        if (error) throw error;
+      }
+
+      setMessage({ type: 'success', text: 'SMS configuration saved successfully!' });
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'Failed to save SMS configuration' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h1 className="text-lg font-semibold text-gray-900 dark:text-white">System Settings</h1>
+        <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">Configure email and SMS settings for the system</p>
+      </div>
+
+      {message && (
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs ${
+          message.type === 'success'
+            ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400'
+            : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400'
+        }`}>
+          {message.type === 'success' ? (
+            <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" />
+          ) : (
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+          )}
+          <p>{message.text}</p>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-gray-800 rounded-md shadow-sm p-4 border border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900/30 rounded-md flex items-center justify-center">
+            <Mail className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Email Configuration</h2>
+            <p className="text-xs text-gray-600 dark:text-gray-400">Configure SMTP settings for sending emails</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleEmailConfigSave} className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">SMTP Host</label>
+              <input
+                type="text"
+                value={emailConfig.smtp_host}
+                onChange={(e) => setEmailConfig({ ...emailConfig, smtp_host: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="smtp.gmail.com"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">SMTP Port</label>
+              <input
+                type="text"
+                value={emailConfig.smtp_port}
+                onChange={(e) => setEmailConfig({ ...emailConfig, smtp_port: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="587"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
+              <input
+                type="text"
+                value={emailConfig.smtp_username}
+                onChange={(e) => setEmailConfig({ ...emailConfig, smtp_username: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="your-email@example.com"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+              <input
+                type="password"
+                value={emailConfig.smtp_password}
+                onChange={(e) => setEmailConfig({ ...emailConfig, smtp_password: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">From Email</label>
+              <input
+                type="email"
+                value={emailConfig.from_email}
+                onChange={(e) => setEmailConfig({ ...emailConfig, from_email: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="noreply@hospital.com"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">From Name</label>
+              <input
+                type="text"
+                value={emailConfig.from_name}
+                onChange={(e) => setEmailConfig({ ...emailConfig, from_name: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="Hospital Management System"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Encryption</label>
+              <select
+                value={emailConfig.encryption}
+                onChange={(e) => setEmailConfig({ ...emailConfig, encryption: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              >
+                <option value="tls">TLS</option>
+                <option value="ssl">SSL</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 text-sm rounded-md font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Save className="w-4 h-4" />
+              {loading ? 'Saving...' : 'Save Email Configuration'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-md shadow-sm p-4 border border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 bg-green-100 dark:bg-green-900/30 rounded-md flex items-center justify-center">
+            <MessageSquare className="w-4 h-4 text-green-600 dark:text-green-400" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-gray-900 dark:text-white">SMS Configuration</h2>
+            <p className="text-xs text-gray-600 dark:text-gray-400">Configure SMS gateway for sending text messages</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSmsConfigSave} className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">SMS Provider</label>
+              <select
+                value={smsConfig.provider}
+                onChange={(e) => setSmsConfig({ ...smsConfig, provider: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              >
+                <option value="twilio">Twilio</option>
+                <option value="nexmo">Nexmo / Vonage</option>
+                <option value="africastalking">Africa's Talking</option>
+                <option value="custom">Custom Provider</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">API Key / Account SID</label>
+              <input
+                type="text"
+                value={smsConfig.api_key}
+                onChange={(e) => setSmsConfig({ ...smsConfig, api_key: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="Your API Key"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">API Secret / Auth Token</label>
+              <input
+                type="password"
+                value={smsConfig.api_secret}
+                onChange={(e) => setSmsConfig({ ...smsConfig, api_secret: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Sender ID / Phone Number</label>
+              <input
+                type="text"
+                value={smsConfig.sender_id}
+                onChange={(e) => setSmsConfig({ ...smsConfig, sender_id: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="+1234567890"
+                required
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">API URL (Optional)</label>
+              <input
+                type="url"
+                value={smsConfig.api_url}
+                onChange={(e) => setSmsConfig({ ...smsConfig, api_url: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                placeholder="https://api.sms-provider.com/v1"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 text-sm rounded-md font-medium hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Save className="w-4 h-4" />
+              {loading ? 'Saving...' : 'Save SMS Configuration'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

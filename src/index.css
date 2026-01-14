@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  html {
+    font-size: 15px;
+  }
+
+  body {
+    @apply text-base;
+  }
+
+  input, select, textarea {
+    @apply text-base;
+  }
+
+  button {
+    @apply text-base;
+  }
+
+  table {
+    @apply text-base;
+  }
+}
