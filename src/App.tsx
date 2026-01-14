@@ -129,7 +129,36 @@ function AppContent() {
   );
 }
 
+import { isSupabaseConfigured } from './lib/supabase';
+import { ShieldAlert } from 'lucide-react';
+
 function App() {
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-lg border border-red-200 p-8 max-w-md w-full text-center">
+          <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+            <ShieldAlert className="w-8 h-8 text-red-600" />
+          </div>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">Configuration Required</h1>
+          <p className="text-gray-600 mb-6">
+            The application is missing necessary connection details for the database.
+          </p>
+          <div className="bg-gray-50 p-4 rounded-lg text-left text-sm text-gray-700 border border-gray-200">
+            <p className="font-semibold mb-2">Please ensure the following environment variables are set:</p>
+            <ul className="list-disc list-inside space-y-1 font-mono text-xs">
+              <li>VITE_SUPABASE_URL</li>
+              <li>VITE_SUPABASE_ANON_KEY</li>
+            </ul>
+          </div>
+          <p className="text-xs text-gray-500 mt-6">
+            If you are the administrator, please check your deployment settings (e.g., Netlify Environment Variables).
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AuthProvider>
       <AppContent />
