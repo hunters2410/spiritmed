@@ -9,6 +9,7 @@ import { DeceasedPatients } from './pages/DeceasedPatients';
 import { DischargedPatients } from './pages/DischargedPatients';
 import { PatientFiles } from './pages/PatientFiles';
 import { Appointments } from './pages/Appointments';
+import { AppointmentCalendar } from './pages/AppointmentCalendar';
 import { Settings } from './pages/Settings';
 import { Profile } from './pages/Profile';
 import { Users } from './pages/Users';
@@ -24,6 +25,8 @@ import { HumanResources } from './pages/HumanResources';
 import { MedicalAids } from './pages/MedicalAids';
 import { ReferralDoctors } from './pages/ReferralDoctors';
 import { Layout } from './components/Layout';
+import { isSupabaseConfigured } from './lib/supabase';
+import { ShieldAlert } from 'lucide-react';
 
 function AppContent() {
   const { user, profile, loading } = useAuth();
@@ -89,6 +92,8 @@ function AppContent() {
         return <PatientFiles />;
       case 'appointments':
         return <Appointments />;
+      case 'appointments/calendar':
+        return <AppointmentCalendar />;
       case 'doctors':
         return <Doctors />;
       case 'nurses':
@@ -128,9 +133,6 @@ function AppContent() {
     </Layout>
   );
 }
-
-import { isSupabaseConfigured } from './lib/supabase';
-import { ShieldAlert } from 'lucide-react';
 
 function App() {
   if (!isSupabaseConfigured) {
