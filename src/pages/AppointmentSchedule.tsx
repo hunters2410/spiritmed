@@ -23,9 +23,7 @@ export function AppointmentSchedule() {
         },
         startTime: '09:00',
         endTime: '17:00',
-        duration: 30, // minutes
-        breakStartTime: '13:00',
-        breakEndTime: '14:00'
+        duration: 30 // minutes
     });
 
     useEffect(() => {
@@ -47,12 +45,10 @@ export function AppointmentSchedule() {
             if (data && data.length > 0) {
                 // Map database records to state
                 const daysMap: Record<number, boolean> = { ...scheduleConfig.daysOfWeek };
-                // Reset all to false first? No, let's keep default or reset.
-                // Actually, better to reset to false and only check found ones.
+                // Reset/init days
                 Object.keys(daysMap).forEach(key => daysMap[parseInt(key)] = false);
 
-                // Take the first record for general time settings (assuming consistent shifts for now)
-                // In a more complex app, we'd handle different times per day.
+                // Take the first record for general time settings
                 const firstRecord = data[0];
 
                 data.forEach(record => {
@@ -64,8 +60,6 @@ export function AppointmentSchedule() {
                     daysOfWeek: daysMap,
                     startTime: firstRecord.start_time.slice(0, 5), // HH:MM:SS -> HH:MM
                     endTime: firstRecord.end_time.slice(0, 5),
-                    breakStartTime: firstRecord.break_start_time ? firstRecord.break_start_time.slice(0, 5) : prev.breakStartTime,
-                    breakEndTime: firstRecord.break_end_time ? firstRecord.break_end_time.slice(0, 5) : prev.breakEndTime,
                     duration: firstRecord.slot_duration
                 }));
             }
@@ -129,8 +123,8 @@ export function AppointmentSchedule() {
                         day_of_week: i,
                         start_time: scheduleConfig.startTime,
                         end_time: scheduleConfig.endTime,
-                        break_start_time: scheduleConfig.breakStartTime,
-                        break_end_time: scheduleConfig.breakEndTime,
+                        break_start_time: null,
+                        break_end_time: null,
                         slot_duration: scheduleConfig.duration,
                         is_active: true
                     });
@@ -163,25 +157,19 @@ export function AppointmentSchedule() {
 
                     let slotTime = new Date(`${dateStr}T${scheduleConfig.startTime}`);
                     const dayEndTime = new Date(`${dateStr}T${scheduleConfig.endTime}`);
-                    const breakStart = new Date(`${dateStr}T${scheduleConfig.breakStartTime}`);
-                    const breakEnd = new Date(`${dateStr}T${scheduleConfig.breakEndTime}`);
 
                     while (slotTime < dayEndTime) {
                         const slotEndTime = new Date(slotTime.getTime() + scheduleConfig.duration * 60000);
                         if (slotEndTime > dayEndTime) break;
 
-                        const isBreak = (slotTime >= breakStart && slotTime < breakEnd) ||
-                            (slotEndTime > breakStart && slotEndTime <= breakEnd);
+                        slots.push({
+                            doctor_id: selectedDoctor,
+                            branch_id: profile?.branch_id,
+                            start_time: slotTime.toISOString(),
+                            end_time: slotEndTime.toISOString(),
+                            is_booked: false
+                        });
 
-                        if (!isBreak) {
-                            slots.push({
-                                doctor_id: selectedDoctor,
-                                branch_id: profile?.branch_id,
-                                start_time: slotTime.toISOString(),
-                                end_time: slotEndTime.toISOString(),
-                                is_booked: false
-                            });
-                        }
                         slotTime = slotEndTime;
                     }
                 }
@@ -325,27 +313,6 @@ export function AppointmentSchedule() {
                                     step="5"
                                 />
                             </div>
-                            <div className="md:col-span-2 grid grid-cols-2 gap-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                                <div className="col-span-2 text-sm font-medium text-gray-700 mb-2">Break Time (No slots generated)</div>
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">Break Start</label>
-                                    <input
-                                        type="time"
-                                        value={scheduleConfig.breakStartTime}
-                                        onChange={(e) => setScheduleConfig({ ...scheduleConfig, breakStartTime: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">Break End</label>
-                                    <input
-                                        type="time"
-                                        value={scheduleConfig.breakEndTime}
-                                        onChange={(e) => setScheduleConfig({ ...scheduleConfig, breakEndTime: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-sm"
-                                    />
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -413,15 +380,10 @@ export function AppointmentSchedule() {
                                     {/* Rough calculation */}
                                     <span className="text-sm font-medium text-gray-900">
                                         {Math.floor(((
-                                            (new Date(`2000-01-01T${scheduleConfig.endTime}`).getTime() - new Date(`2000-01-01T${scheduleConfig.startTime}`).getTime()) -
-                                            (new Date(`2000-01-01T${scheduleConfig.breakEndTime}`).getTime() - new Date(`2000-01-01T${scheduleConfig.breakStartTime}`).getTime())
+                                            (new Date(`2000-01-01T${scheduleConfig.endTime}`).getTime() - new Date(`2000-01-01T${scheduleConfig.startTime}`).getTime())
                                         ) / 60000) / scheduleConfig.duration)}
                                     </span>
                                 </div>
-                            </div>
-
-                            <div className="text-xs text-gray-500 mt-4">
-                                * Slots overlapping with break time ({scheduleConfig.breakStartTime} - {scheduleConfig.breakEndTime}) will be skipped.
                             </div>
                         </div>
                     </div>
