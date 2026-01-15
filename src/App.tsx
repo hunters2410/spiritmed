@@ -10,6 +10,7 @@ import { DischargedPatients } from './pages/DischargedPatients';
 import { PatientFiles } from './pages/PatientFiles';
 import { Appointments } from './pages/Appointments';
 import { AppointmentCalendar } from './pages/AppointmentCalendar';
+import { AppointmentSchedule } from './pages/AppointmentSchedule';
 import { Settings } from './pages/Settings';
 import { Profile } from './pages/Profile';
 import { Users } from './pages/Users';
@@ -94,6 +95,8 @@ function AppContent() {
         return <Appointments />;
       case 'appointments/calendar':
         return <AppointmentCalendar />;
+      case 'appointments/schedule':
+        return <AppointmentSchedule />;
       case 'doctors':
         return <Doctors />;
       case 'nurses':
