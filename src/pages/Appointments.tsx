@@ -27,7 +27,10 @@ export function Appointments() {
   const [patients, setPatients] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [dateRange, setDateRange] = useState({
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0]
+  });
   const [formData, setFormData] = useState({
     patient_id: '',
     doctor_id: '',
@@ -41,14 +44,15 @@ export function Appointments() {
     loadAppointments();
     loadPatients();
     loadDoctors();
-  }, [profile, selectedDate]);
+  }, [profile, dateRange]);
 
   const loadAppointments = async () => {
     if (!profile?.branch_id && profile?.role !== 'super_admin') return;
 
     try {
-      const nextDay = new Date(selectedDate);
-      nextDay.setDate(nextDay.getDate() + 1);
+      // Adjust endDate to include the full day
+      const endDate = new Date(dateRange.endDate);
+      endDate.setDate(endDate.getDate() + 1);
 
       let query = supabase
         .from('appointments')
@@ -57,8 +61,8 @@ export function Appointments() {
           patients (full_name, phone),
           users:doctor_id (full_name)
         `)
-        .gte('appointment_date', selectedDate)
-        .lt('appointment_date', nextDay.toISOString().split('T')[0])
+        .gte('appointment_date', dateRange.startDate)
+        .lt('appointment_date', endDate.toISOString().split('T')[0])
         .order('appointment_date', { ascending: true });
 
       if (profile.role !== 'super_admin') {
@@ -196,16 +200,35 @@ export function Appointments() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-        <div className="flex items-center space-x-4">
-          <CalendarIcon className="w-5 h-5 text-gray-400" />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-          />
-          <div className="text-sm text-gray-600">
-            Showing {appointments.length} appointments for {new Date(selectedDate).toLocaleDateString()}
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center space-x-2">
+            <span className="text-sm font-medium text-gray-700">From:</span>
+            <div className="relative">
+              <input
+                type="date"
+                value={dateRange.startDate}
+                onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
+                className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none text-sm"
+              />
+              <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <span className="text-sm font-medium text-gray-700">To:</span>
+            <div className="relative">
+              <input
+                type="date"
+                value={dateRange.endDate}
+                onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
+                className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none text-sm"
+              />
+              <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            </div>
+          </div>
+
+          <div className="flex-1 text-right text-sm text-gray-600">
+            Found {appointments.length} appointments
           </div>
         </div>
       </div>
@@ -215,7 +238,7 @@ export function Appointments() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
             <CalendarIcon className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No appointments scheduled</h3>
-            <p className="text-gray-600">There are no appointments for this date.</p>
+            <p className="text-gray-600">There are no appointments for this period.</p>
           </div>
         ) : (
           appointments.map((appointment) => (
