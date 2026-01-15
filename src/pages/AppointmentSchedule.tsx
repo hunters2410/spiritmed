@@ -29,6 +29,54 @@ export function AppointmentSchedule() {
     });
 
     useEffect(() => {
+        if (selectedDoctor) {
+            loadAvailability(selectedDoctor);
+        }
+    }, [selectedDoctor]);
+
+    const loadAvailability = async (doctorId: string) => {
+        try {
+            setLoading(true);
+            const { data, error } = await supabase
+                .from('doctor_availability')
+                .select('*')
+                .eq('doctor_id', doctorId);
+
+            if (error) throw error;
+
+            if (data && data.length > 0) {
+                // Map database records to state
+                const daysMap: Record<number, boolean> = { ...scheduleConfig.daysOfWeek };
+                // Reset all to false first? No, let's keep default or reset.
+                // Actually, better to reset to false and only check found ones.
+                Object.keys(daysMap).forEach(key => daysMap[parseInt(key)] = false);
+
+                // Take the first record for general time settings (assuming consistent shifts for now)
+                // In a more complex app, we'd handle different times per day.
+                const firstRecord = data[0];
+
+                data.forEach(record => {
+                    daysMap[record.day_of_week] = record.is_active;
+                });
+
+                setScheduleConfig(prev => ({
+                    ...prev,
+                    daysOfWeek: daysMap,
+                    startTime: firstRecord.start_time.slice(0, 5), // HH:MM:SS -> HH:MM
+                    endTime: firstRecord.end_time.slice(0, 5),
+                    breakStartTime: firstRecord.break_start_time ? firstRecord.break_start_time.slice(0, 5) : prev.breakStartTime,
+                    breakEndTime: firstRecord.break_end_time ? firstRecord.break_end_time.slice(0, 5) : prev.breakEndTime,
+                    duration: firstRecord.slot_duration
+                }));
+            }
+        } catch (error) {
+            console.error('Error loading availability:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
         loadDoctors();
     }, [profile]);
 
@@ -62,7 +110,7 @@ export function AppointmentSchedule() {
         }));
     };
 
-    const generateSlots = () => {
+    const generateSlots = async () => {
         if (!selectedDoctor) {
             alert('Please select a doctor');
             return;
@@ -70,7 +118,39 @@ export function AppointmentSchedule() {
 
         setLoading(true);
         try {
-            // Calculate all slots
+            // 1. Save Configuration to doctor_availability
+            const availabilityUpserts = [];
+            for (let i = 0; i < 7; i++) {
+                // @ts-ignore
+                if (scheduleConfig.daysOfWeek[i]) {
+                    availabilityUpserts.push({
+                        doctor_id: selectedDoctor,
+                        branch_id: profile?.branch_id,
+                        day_of_week: i,
+                        start_time: scheduleConfig.startTime,
+                        end_time: scheduleConfig.endTime,
+                        break_start_time: scheduleConfig.breakStartTime,
+                        break_end_time: scheduleConfig.breakEndTime,
+                        slot_duration: scheduleConfig.duration,
+                        is_active: true
+                    });
+                } else {
+                    // We might want to set is_active = false for unchecked days if we are strictly managing state
+                    // For now, we only upsert active ones or we'd need to delete old ones.
+                    // Simpler approach: Upsert "is_active: false" for unchecked days if they exist? 
+                    // Let's just focus on saving the active pattern.
+                }
+            }
+
+            if (availabilityUpserts.length > 0) {
+                const { error: configError } = await supabase
+                    .from('doctor_availability')
+                    .upsert(availabilityUpserts, { onConflict: 'doctor_id,day_of_week' });
+                if (configError) throw configError;
+            }
+
+
+            // 2. Generate and Insert Slots
             const slots = [];
             let currentDate = new Date(scheduleConfig.startDate);
             const endDate = new Date(scheduleConfig.endDate);
@@ -79,24 +159,17 @@ export function AppointmentSchedule() {
                 const dayOfWeek = currentDate.getDay();
                 // @ts-ignore
                 if (scheduleConfig.daysOfWeek[dayOfWeek]) {
-                    // This day is selected
                     const dateStr = currentDate.toISOString().split('T')[0];
 
-                    // Create start and end date objects for this day
                     let slotTime = new Date(`${dateStr}T${scheduleConfig.startTime}`);
                     const dayEndTime = new Date(`${dateStr}T${scheduleConfig.endTime}`);
                     const breakStart = new Date(`${dateStr}T${scheduleConfig.breakStartTime}`);
                     const breakEnd = new Date(`${dateStr}T${scheduleConfig.breakEndTime}`);
 
                     while (slotTime < dayEndTime) {
-                        // Check if this slot overlaps with break
                         const slotEndTime = new Date(slotTime.getTime() + scheduleConfig.duration * 60000);
-
-                        // If slot ends after day ends, stop
                         if (slotEndTime > dayEndTime) break;
 
-                        // Simple break check: if slot starts inside break or ends inside break
-                        // or encompasses break (though slots are usually smaller than break)
                         const isBreak = (slotTime >= breakStart && slotTime < breakEnd) ||
                             (slotEndTime > breakStart && slotEndTime <= breakEnd);
 
@@ -104,36 +177,36 @@ export function AppointmentSchedule() {
                             slots.push({
                                 doctor_id: selectedDoctor,
                                 branch_id: profile?.branch_id,
-                                appointment_date: slotTime.toISOString(),
-                                duration_minutes: scheduleConfig.duration,
-                                status: 'available', // Assuming 'available' is a valid status or this is a placeholder
-                                created_by: profile?.id,
-                                notes: 'Generated Slot'
+                                start_time: slotTime.toISOString(),
+                                end_time: slotEndTime.toISOString(),
+                                is_booked: false
                             });
                         }
-
-                        // Move to next slot
                         slotTime = slotEndTime;
                     }
                 }
-                // Next day
                 currentDate.setDate(currentDate.getDate() + 1);
             }
 
             console.log(`Generated ${slots.length} potential slots.`);
-            // In a real implementation, we would now insert these into Supabase.
-            // However, since we don't have an 'availability' table confirmed and 
-            // the 'appointments' table requires patient_id usually (or maybe not),
-            // we will simulate the action or try to insert if 'status' can be 'available'.
 
-            // For this user request, I will first confirm generating logic displayed to user
-            // and maybe attempt to save if the user requested "schedule ... according to preference".
+            if (slots.length > 0) {
+                // Batch insert - limit to 500 to be safe? Supabase handles larger batches usually.
+                // On conflict: do nothing (ignore duplicates)
+                const { error: slotsError } = await supabase
+                    .from('appointment_slots')
+                    .upsert(slots, { onConflict: 'doctor_id,start_time', ignoreDuplicates: true });
 
-            alert(`Configuration ready! This would generate ${slots.length} appointment slots for the selected period.`);
+                if (slotsError) throw slotsError;
+
+                alert(`Successfully saved schedule and generated ${slots.length} slots!`);
+            } else {
+                alert('Schedule saved, but no slots were generated for the selected date range.');
+            }
 
         } catch (error) {
             console.error('Error generating slots:', error);
-            alert('Failed to generate slots');
+            alert('Failed to save schedule or generate slots. Please ensure the database tables are created.');
         } finally {
             setLoading(false);
         }
