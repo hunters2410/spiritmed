@@ -279,7 +279,7 @@ export function Layout({ children }: LayoutProps) {
 
       <div className={`transition-all ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-56'}`}>
         <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-30">
-          <div className="flex items-center justify-between gap-4 px-6 py-4">
+          <div className="flex items-center justify-between gap-2 md:gap-4 px-3 md:px-6 py-3 md:py-4">
             <button onClick={() => setSidebarOpen(true)} className="lg:hidden">
               <Menu className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             </button>
@@ -292,11 +292,11 @@ export function Layout({ children }: LayoutProps) {
               <div className="relative" ref={quickActionRef}>
                 <button
                   onClick={() => setQuickActionOpen(!quickActionOpen)}
-                  className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white text-sm font-medium rounded-lg hover:from-green-700 hover:to-emerald-700 transition shadow-sm"
+                  className="flex items-center space-x-2 px-3 md:px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white text-sm font-medium rounded-lg hover:from-green-700 hover:to-emerald-700 transition shadow-sm"
                   title="Quick Actions"
                 >
                   <Zap className="w-4 h-4" />
-                  <span>Quick Action</span>
+                  <span className="hidden sm:inline">Quick Action</span>
                 </button>
 
                 {quickActionOpen && (

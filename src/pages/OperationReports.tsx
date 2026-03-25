@@ -304,54 +304,56 @@ export default function OperationReports() {
 
             {/* Table */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="bg-gray-50 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
-                            <th className="px-6 py-4">Date</th>
-                            <th className="px-6 py-4">Patient</th>
-                            <th className="px-6 py-4">Procedure</th>
-                            <th className="px-6 py-4">Hospital</th>
-                            <th className="px-6 py-4">Doctor</th>
-                            <th className="px-6 py-4 text-right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
-                        {loading ? (
-                            <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">Loading reports...</td></tr>
-                        ) : reports.length === 0 ? (
-                            <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">No operation reports found.</td></tr>
-                        ) : reports.map(r => (
-                            <tr key={r.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition group">
-                                <td className="px-6 py-4 text-sm font-medium text-gray-600 dark:text-gray-400">{new Date(r.report_date).toLocaleDateString()}</td>
-                                <td className="px-6 py-4">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm font-bold text-gray-900 dark:text-white">{r.patient?.full_name}</span>
-                                        <span className="text-[10px] text-gray-400">{r.patient?.patient_number}</span>
-                                    </div>
-                                </td>
-                                <td className="px-6 py-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{r.procedure?.name || 'N/A'}</td>
-                                <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">{r.hospital?.name || 'N/A'}</td>
-                                <td className="px-6 py-4 text-sm text-gray-500 font-medium">Dr. {r.doctor?.full_name}</td>
-                                <td className="px-6 py-4 text-right">
-                                    <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition">
-                                        <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
-                                        <button onClick={() => {
-                                            setSelectedDoc(r);
-                                            const { patient, doctor, hospital, procedure, created_at, updated_at, id, ...formData } = r as any;
-                                            setForm({
-                                                ...formData,
-                                                anaesthetist_ids: formData.anaesthetist_ids || [],
-                                                assistant_ids: formData.assistant_ids || []
-                                            } as any);
-                                            setShowModal(true);
-                                        }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                        <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
-                                    </div>
-                                </td>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
+                                <th className="px-6 py-4">Date</th>
+                                <th className="px-6 py-4">Patient</th>
+                                <th className="px-6 py-4">Procedure</th>
+                                <th className="px-6 py-4">Hospital</th>
+                                <th className="px-6 py-4">Doctor</th>
+                                <th className="px-6 py-4 text-right">Actions</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
+                            {loading ? (
+                                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">Loading reports...</td></tr>
+                            ) : reports.length === 0 ? (
+                                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">No operation reports found.</td></tr>
+                            ) : reports.map(r => (
+                                <tr key={r.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition group">
+                                    <td className="px-6 py-4 text-sm font-medium text-gray-600 dark:text-gray-400">{new Date(r.report_date).toLocaleDateString()}</td>
+                                    <td className="px-6 py-4">
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-bold text-gray-900 dark:text-white">{r.patient?.full_name}</span>
+                                            <span className="text-[10px] text-gray-400">{r.patient?.patient_number}</span>
+                                        </div>
+                                    </td>
+                                    <td className="px-6 py-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{r.procedure?.name || 'N/A'}</td>
+                                    <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">{r.hospital?.name || 'N/A'}</td>
+                                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">Dr. {r.doctor?.full_name}</td>
+                                    <td className="px-6 py-4 text-right">
+                                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition">
+                                            <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                            <button onClick={() => {
+                                                setSelectedDoc(r);
+                                                const { patient, doctor, hospital, procedure, created_at, updated_at, id, ...formData } = r as any;
+                                                setForm({
+                                                    ...formData,
+                                                    anaesthetist_ids: formData.anaesthetist_ids || [],
+                                                    assistant_ids: formData.assistant_ids || []
+                                                } as any);
+                                                setShowModal(true);
+                                            }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                            <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             {/* Add/Edit Modal */}

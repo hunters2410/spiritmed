@@ -250,7 +250,7 @@ export default function LabResults() {
 
                             {/* FULL BLOOD COUNT */}
                             <SectionHeader icon={Activity} title="Full Blood Count" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Date Done</label><input type="date" value={form.fbc_date} onChange={f('fbc_date')} className={inputCls} /></div>
                                 <div><label className={labelCls}>Hemoglobin (Hb)</label><input type="text" value={form.hb} onChange={f('hb')} className={inputCls} placeholder="e.g. 14.5 g/dL" /></div>
                                 <div><label className={labelCls}>WBC</label><input type="text" value={form.wbc} onChange={f('wbc')} className={inputCls} placeholder="e.g. 7.5 x10³/µL" /></div>
@@ -260,7 +260,7 @@ export default function LabResults() {
 
                             {/* ELECTROLYTES */}
                             <SectionHeader icon={FlaskConical} title="Electrolytes" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Date Done</label><input type="date" value={form.electrolytes_date} onChange={f('electrolytes_date')} className={inputCls} /></div>
                                 <div><label className={labelCls}>Sodium (Na)</label><input type="text" value={form.na} onChange={f('na')} className={inputCls} placeholder="e.g. 140 mmol/L" /></div>
                                 <div><label className={labelCls}>Potassium (K)</label><input type="text" value={form.k} onChange={f('k')} className={inputCls} placeholder="e.g. 4.0 mmol/L" /></div>
@@ -270,7 +270,7 @@ export default function LabResults() {
 
                             {/* OTHER TESTS - PSA / TESTO */}
                             <SectionHeader icon={Filter} title="Other Tests" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>PSA Date Done</label><input type="date" value={form.psa_date} onChange={f('psa_date')} className={inputCls} /></div>
                                 <div><label className={labelCls}>PSA</label><input type="text" value={form.psa_value} onChange={f('psa_value')} className={inputCls} placeholder="e.g. 1.2 ng/mL" /></div>
                                 <div><label className={labelCls}>Testosterone Date Done</label><input type="date" value={form.testo_date} onChange={f('testo_date')} className={inputCls} /></div>
@@ -279,7 +279,7 @@ export default function LabResults() {
 
                             {/* URINE CULTURE */}
                             <SectionHeader icon={FlaskConical} title="Urine Culture" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Date Done</label><input type="date" value={form.urine_culture_date} onChange={f('urine_culture_date')} className={inputCls} /></div>
                                 <div><label className={labelCls}>Isolate</label><input type="text" value={form.isolate} onChange={f('isolate')} className={inputCls} placeholder="e.g. E. coli" /></div>
                                 <div className="col-span-2"><label className={labelCls}>Sensitivity</label><input type="text" value={form.sensitivity} onChange={f('sensitivity')} className={inputCls} placeholder="e.g. Sensitive to Amoxicillin" /></div>
@@ -287,7 +287,7 @@ export default function LabResults() {
 
                             {/* HISTOLOGY */}
                             <SectionHeader icon={Microscope} title="Histology" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Date Done</label><input type="date" value={form.histology_date} onChange={f('histology_date')} className={inputCls} /></div>
                                 <div>
                                     <label className={labelCls}>Histology Type</label>
@@ -309,7 +309,7 @@ export default function LabResults() {
 
                             {/* IMAGING */}
                             <SectionHeader icon={Eye} title="Imaging" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Date Done</label><input type="date" value={form.imaging_date} onChange={f('imaging_date')} className={inputCls} /></div>
                                 <div>
                                     <label className={labelCls}>Imaging Type</label>
@@ -331,7 +331,7 @@ export default function LabResults() {
 
                             {/* OTHER TESTS */}
                             <SectionHeader icon={Plus} title="Other Tests" />
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Date Done</label><input type="date" value={form.other_test_date} onChange={f('other_test_date')} className={inputCls} /></div>
                                 <div><label className={labelCls}>Test Name</label><input type="text" value={form.other_test_name} onChange={f('other_test_name')} className={inputCls} placeholder="e.g. HbA1c" /></div>
                                 <div className="col-span-2"><label className={labelCls}>Result</label><input type="text" value={form.other_test_result} onChange={f('other_test_result')} className={inputCls} placeholder="Enter result..." /></div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, FormEvent } from 'react';
 import { supabase, Branch } from '../lib/supabase';
 import { Plus, Search, Edit2, Trash2, Users } from 'lucide-react';
 
@@ -46,7 +46,7 @@ export function Branches() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setSubmitLoading(true);
     try {
@@ -115,7 +115,7 @@ export function Branches() {
     }
   };
 
-  const handleCreateAdmin = async (e: React.FormEvent) => {
+  const handleCreateAdmin = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedBranch) return;
 
@@ -208,68 +208,70 @@ export function Branches() {
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-md shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
-            <tr>
-              <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Branch Name</th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Email</th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Phone</th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Location</th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Status</th>
-              <th className="px-3 py-2 text-center font-semibold text-gray-900 dark:text-white">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-            {filteredBranches.map((branch) => (
-              <tr key={branch.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition">
-                <td className="px-3 py-2.5 text-gray-900 dark:text-white font-medium">{branch.name}</td>
-                <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{branch.email || '-'}</td>
-                <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{branch.phone || '-'}</td>
-                <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">
-                  {branch.city && branch.country ? `${branch.city}, ${branch.country}` : '-'}
-                </td>
-                <td className="px-3 py-2.5">
-                  <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${branch.is_active ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'}`}>
-                    {branch.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-                <td className="px-3 py-2.5">
-                  <div className="flex items-center justify-center space-x-1">
-                    <button
-                      onClick={() => {
-                        setSelectedBranch(branch);
-                        setShowAdminModal(true);
-                      }}
-                      className="p-1.5 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition"
-                      title="Create Admin"
-                    >
-                      <Users className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleEdit(branch)}
-                      className="p-1.5 text-gray-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition"
-                      title="Edit"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(branch)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Branch Name</th>
+                <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Email</th>
+                <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Phone</th>
+                <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Location</th>
+                <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Status</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-900 dark:text-white">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-        {filteredBranches.length === 0 && (
-          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-            No branches found
-          </div>
-        )}
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {filteredBranches.map((branch) => (
+                <tr key={branch.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition">
+                  <td className="px-3 py-2.5 text-gray-900 dark:text-white font-medium">{branch.name}</td>
+                  <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{branch.email || '-'}</td>
+                  <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{branch.phone || '-'}</td>
+                  <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">
+                    {branch.city && branch.country ? `${branch.city}, ${branch.country}` : '-'}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${branch.is_active ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'}`}>
+                      {branch.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-center space-x-1">
+                      <button
+                        onClick={() => {
+                          setSelectedBranch(branch);
+                          setShowAdminModal(true);
+                        }}
+                        className="p-1.5 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition"
+                        title="Create Admin"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleEdit(branch)}
+                        className="p-1.5 text-gray-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition"
+                        title="Edit"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(branch)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filteredBranches.length === 0 && (
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              No branches found
+            </div>
+          )}
+        </div>
       </div>
 
       {showModal && (

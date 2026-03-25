@@ -111,39 +111,41 @@ export function MedicineFrequencies() {
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                <table className="w-full text-sm">
-                    <thead>
-                        <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
-                            <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Code/Name</th>
-                            <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Description</th>
-                            <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                        {loading ? (
-                            <tr><td colSpan={3} className="px-6 py-10 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto" /></td></tr>
-                        ) : paginated.length === 0 ? (
-                            <tr><td colSpan={3} className="px-6 py-10 text-center text-gray-500">No frequencies found</td></tr>
-                        ) : paginated.map(f => (
-                            <tr key={f.id} className="hover:bg-green-50/50 dark:hover:bg-green-900/10 transition-colors">
-                                <td className="px-6 py-4 font-bold text-green-600 dark:text-green-400">{f.name}</td>
-                                <td className="px-6 py-4 text-gray-600 dark:text-gray-300">{f.description || '—'}</td>
-                                <td className="px-6 py-4">
-                                    <div className="flex justify-center gap-2">
-                                        <button onClick={() => { setEditingFreq(f); setFormData({ name: f.name, description: f.description || '' }); setError(null); setShowModal(true); }}
-                                            className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition" title="Edit">
-                                            <Pencil className="w-4 h-4" />
-                                        </button>
-                                        <button onClick={() => handleDelete(f.id)}
-                                            className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition" title="Delete">
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                </td>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                                <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Code/Name</th>
+                                <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Description</th>
+                                <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Actions</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                            {loading ? (
+                                <tr><td colSpan={3} className="px-6 py-10 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto" /></td></tr>
+                            ) : paginated.length === 0 ? (
+                                <tr><td colSpan={3} className="px-6 py-10 text-center text-gray-500">No frequencies found</td></tr>
+                            ) : paginated.map(f => (
+                                <tr key={f.id} className="hover:bg-green-50/50 dark:hover:bg-green-900/10 transition-colors">
+                                    <td className="px-6 py-4 font-bold text-green-600 dark:text-green-400">{f.name}</td>
+                                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300">{f.description || '—'}</td>
+                                    <td className="px-6 py-4">
+                                        <div className="flex justify-center gap-2">
+                                            <button onClick={() => { setEditingFreq(f); setFormData({ name: f.name, description: f.description || '' }); setError(null); setShowModal(true); }}
+                                                className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition" title="Edit">
+                                                <Pencil className="w-4 h-4" />
+                                            </button>
+                                            <button onClick={() => handleDelete(f.id)}
+                                                className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition" title="Delete">
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
 
                 {/* ─── pagination controls ─── */}
                 {totalPages > 1 && (

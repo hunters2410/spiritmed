@@ -568,7 +568,7 @@ export function Prescriptions() {
                             )}
 
                             {/* Date + Patient */}
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className={labelCls}>Date</label>
                                     <input type="date" value={form.prescription_date}
@@ -622,7 +622,7 @@ export function Prescriptions() {
                                         />
 
                                         {/* Period + Time Unit */}
-                                        <div className="grid grid-cols-2 gap-3 mt-3">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
                                             <div>
                                                 <label className={labelCls}>Period</label>
                                                 <input type="text" value={item.period}
