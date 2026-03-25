@@ -3,28 +3,20 @@ import { useAuth } from '../contexts/AuthContext';
 import { GlobalSearch } from './GlobalSearch';
 import {
   Building2, Users, Calendar, FileText, DollarSign, Package,
-  Settings, LogOut, Menu, X, Bell, MessageSquare, Home,
-  UserPlus, Stethoscope, Syringe, ClipboardList, TrendingUp,
+  Settings, LogOut, Menu, X, Bell, MessageSquare,
+  Stethoscope, TrendingUp,
   Briefcase, UserCheck, FileSpreadsheet, BarChart3, User,
   Moon, Sun, ChevronLeft, ChevronRight, Activity, Microscope,
   FileCheck, FilePlus, UserCog, Shield, Mail, Send, History,
   Folder, FolderOpen, CalendarCheck, Pill, HeartPulse, ScrollText,
   FileSignature, ClipboardCheck, Skull, UserMinus, CreditCard,
-  Receipt, Wallet, Calculator, LayoutDashboard, Clock, PhoneCall,
-  Globe, ShieldCheck, Database, Zap, Search
+  Receipt, Wallet, Calculator, LayoutDashboard, Clock,
+  Globe, ShieldCheck, Zap, Search, UserPlus, FlaskConical
 } from 'lucide-react';
 
 interface LayoutProps {
   children: ReactNode;
 }
-
-interface NavItem {
-  label: string;
-  icon: any;
-  path: string;
-  roles?: string[];
-}
-
 export function Layout({ children }: LayoutProps) {
   const { profile, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -94,17 +86,41 @@ export function Layout({ children }: LayoutProps) {
     {
       title: 'Medical Records',
       items: [
-        { label: 'Consultations', icon: Stethoscope, path: '/consultations', roles: ['admin', 'doctor'] },
-        { label: 'Prescriptions', icon: Pill, path: '/prescriptions', roles: ['admin', 'doctor'] },
-        { label: 'Vital Signs', icon: Activity, path: '/vital-signs', roles: ['admin', 'doctor', 'nurse'] },
-        { label: 'Lab Results', icon: Microscope, path: '/lab-results', roles: ['admin', 'doctor', 'nurse'] },
-        { label: 'Medical Reports', icon: FileText, path: '/medical-reports', roles: ['admin', 'doctor'] },
-        { label: 'Discharge Summaries', icon: FileCheck, path: '/discharge-summaries', roles: ['admin', 'doctor'] },
-        { label: 'Referral Forms', icon: FileSignature, path: '/referral-forms', roles: ['admin', 'doctor'] },
-        { label: 'Operation Reports', icon: ClipboardCheck, path: '/operation-reports', roles: ['admin', 'doctor'] },
-        { label: 'Medical Certificates', icon: ScrollText, path: '/medical-certificates', roles: ['admin', 'doctor'] },
-        { label: 'Admission Letters', icon: FilePlus, path: '/admission-letters', roles: ['admin', 'doctor', 'nurse'] },
-        { label: 'Follow-ups', icon: HeartPulse, path: '/follow-ups', roles: ['admin', 'doctor', 'nurse'] },
+        { label: 'Consultations', icon: Stethoscope, path: '/consultations', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Prescriptions', icon: Pill, path: '/prescriptions', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Vital Signs', icon: Activity, path: '/vital-signs', roles: ['super_admin', 'admin', 'doctor', 'nurse'] },
+        { label: 'Lab Results', icon: Microscope, path: '/lab-results', roles: ['super_admin', 'admin', 'doctor', 'nurse'] },
+        { label: 'Follow-ups', icon: HeartPulse, path: '/follow-ups', roles: ['super_admin', 'admin', 'doctor', 'nurse'] },
+      ]
+    },
+    {
+      title: 'Clinical Reports',
+      items: [
+        { label: 'Medical Reports', icon: FileText, path: '/medical-reports', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Discharge Summaries', icon: FileCheck, path: '/discharge-summaries', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Referral Forms', icon: FileSignature, path: '/referral-forms', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Operation Reports', icon: ClipboardCheck, path: '/operation-reports', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Medical Certificates', icon: ScrollText, path: '/medical-certificates', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Admission Letters', icon: FilePlus, path: '/admission-letters', roles: ['super_admin', 'admin', 'doctor', 'nurse'] },
+      ]
+    },
+    {
+      title: 'Prescription Items',
+      items: [
+        { label: 'Medicines', icon: Pill, path: '/medicines', roles: ['admin', 'doctor'] },
+        { label: 'Frequency', icon: Clock, path: '/medicine-frequencies', roles: ['admin', 'doctor'] },
+      ]
+    },
+    {
+      title: 'Clinical Setup',
+      items: [
+        { label: 'Complaints', icon: MessageSquare, path: '/complaints', roles: ['admin', 'doctor'] },
+        { label: 'Investigations', icon: Microscope, path: '/investigations', roles: ['admin', 'doctor'] },
+        { label: 'Diagnoses', icon: Activity, path: '/diagnoses', roles: ['admin', 'doctor'] },
+        { label: 'Histology', icon: FlaskConical, path: '/histology', roles: ['admin', 'doctor'] },
+        { label: 'Anaesthetists', icon: UserCheck, path: '/anaesthetists', roles: ['admin', 'doctor'] },
+        { label: 'Assistants', icon: UserPlus, path: '/assistants', roles: ['admin', 'doctor'] },
+        { label: 'Hospitals', icon: Building2, path: '/hospitals', roles: ['admin', 'doctor'] },
       ]
     },
     {
@@ -246,9 +262,8 @@ export function Layout({ children }: LayoutProps) {
                     <a
                       key={item.path}
                       href={item.path}
-                      className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 text-sm text-gray-700 dark:text-gray-300 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 hover:text-green-600 dark:hover:text-green-400 transition-all ${
-                        window.location.pathname === item.path ? 'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/30 text-green-600 dark:text-green-400 font-semibold shadow-sm' : ''
-                      }`}
+                      className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'space-x-3'} px-3 py-2.5 text-sm text-gray-700 dark:text-gray-300 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 hover:text-green-600 dark:hover:text-green-400 transition-all ${window.location.pathname === item.path ? 'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/30 text-green-600 dark:text-green-400 font-semibold shadow-sm' : ''
+                        }`}
                       title={sidebarCollapsed ? item.label : undefined}
                     >
                       <item.icon className="w-4.5 h-4.5 flex-shrink-0" />

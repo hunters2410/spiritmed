@@ -25,6 +25,32 @@ import { Payroll } from './pages/Payroll';
 import { HumanResources } from './pages/HumanResources';
 import { MedicalAids } from './pages/MedicalAids';
 import { ReferralDoctors } from './pages/ReferralDoctors';
+import { Consultations } from './pages/Consultations';
+import { Prescriptions } from './pages/Prescriptions';
+import { Complaints } from './pages/Complaints';
+import { Investigations } from './pages/Investigations';
+import { Diagnoses } from './pages/Diagnoses';
+import { Vitals } from './pages/Vitals';
+import { Invoices } from './pages/Invoices';
+import { Payments } from './pages/Payments';
+import { Inventory } from './pages/Inventory';
+import { Pharmacy } from './pages/Pharmacy';
+import { AppointmentReports } from './pages/AppointmentReports';
+import { PublicBooking } from './pages/PublicBooking';
+import { OnlineBookings } from './pages/OnlineBookings';
+import { Medicines } from './pages/Medicines';
+import { MedicineFrequencies } from './pages/MedicineFrequencies';
+import MedicalReports from './pages/MedicalReports';
+import DischargeSummaries from './pages/DischargeSummaries';
+import ReferralForms from './pages/ReferralForms';
+import MedicalCertificates from './pages/MedicalCertificates';
+import OperationReports from './pages/OperationReports';
+import AdmissionForms from './pages/AdmissionForms';
+import { Anaesthetists } from './pages/Anaesthetists';
+import { Assistants } from './pages/Assistants';
+import { Hospitals } from './pages/Hospitals';
+import LabResults from './pages/LabResults';
+import { Histology } from './pages/Histology';
 import { Layout } from './components/Layout';
 import { isSupabaseConfigured } from './lib/supabase';
 import { ShieldAlert } from 'lucide-react';
@@ -34,19 +60,18 @@ function AppContent() {
   const [currentPage, setCurrentPage] = useState('dashboard');
 
   useEffect(() => {
-    const path = window.location.pathname;
-    const page = path.substring(1) || 'dashboard';
-    setCurrentPage(page);
-
     const handleLocationChange = () => {
       const newPath = window.location.pathname;
-      const newPage = newPath.substring(1) || 'dashboard';
-      setCurrentPage(newPage);
+      const newPage = newPath.substring(1).split('?')[0].split('#')[0] || 'dashboard';
+      setCurrentPage(newPage.replace(/\/$/, ''));
     };
+
+    // Initialize on mount
+    handleLocationChange();
 
     window.addEventListener('popstate', handleLocationChange);
 
-    document.addEventListener('click', (e) => {
+    const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       const link = target.closest('a[href^="/"]');
       if (link) {
@@ -55,10 +80,13 @@ function AppContent() {
         window.history.pushState({}, '', href);
         handleLocationChange();
       }
-    });
+    };
+
+    document.addEventListener('click', handleClick);
 
     return () => {
       window.removeEventListener('popstate', handleLocationChange);
+      document.removeEventListener('click', handleClick);
     };
   }, []);
 
@@ -73,6 +101,9 @@ function AppContent() {
   if (!user || !profile) {
     if (currentPage === 'signup') {
       return <Signup />;
+    }
+    if (currentPage === 'book') {
+      return <PublicBooking />;
     }
     return <Login />;
   }
@@ -119,12 +150,62 @@ function AppContent() {
         return <MedicalAids />;
       case 'referral-doctors':
         return <ReferralDoctors />;
+      case 'consultations':
+        return <Consultations />;
+      case 'prescriptions':
+        return <Prescriptions />;
+      case 'medical-reports':
+        return <MedicalReports />;
+      case 'discharge-summaries':
+        return <DischargeSummaries />;
+      case 'referral-forms':
+        return <ReferralForms />;
+      case 'medical-certificates':
+        return <MedicalCertificates />;
+      case 'operation-reports':
+        return <OperationReports />;
+      case 'admission-letters':
+        return <AdmissionForms />;
+      case 'anaesthetists':
+        return <Anaesthetists />;
+      case 'assistants':
+        return <Assistants />;
+      case 'hospitals':
+        return <Hospitals />;
+      case 'complaints':
+        return <Complaints />;
+      case 'investigations':
+        return <Investigations />;
+      case 'diagnoses':
+        return <Diagnoses />;
+      case 'vital-signs':
+        return <Vitals />;
+      case 'invoices':
+        return <Invoices />;
+      case 'payments':
+        return <Payments />;
+      case 'inventory':
+        return <Inventory />;
+      case 'pharmacy':
+        return <Pharmacy />;
+      case 'medicines':
+        return <Medicines />;
+      case 'medicine-frequencies':
+        return <MedicineFrequencies />;
+      case 'appointments/reports':
+        return <AppointmentReports />;
+      case 'appointments/online-booking':
+        return <OnlineBookings />;
       case 'settings':
         return <Settings />;
       case 'profile':
         return <Profile />;
       case 'users':
         return <Users />;
+      case 'lab-results':
+        return <LabResults />;
+      case 'histology':
+        return <Histology />;
       default:
         return <Dashboard />;
     }

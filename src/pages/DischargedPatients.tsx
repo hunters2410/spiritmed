@@ -13,6 +13,8 @@ interface Patient {
   email: string;
   blood_group: string;
   discharge_date: string;
+  discharge_status: string;
+  discharge_notes: string;
   address: string;
   created_at: string;
 }
@@ -69,7 +71,9 @@ export function DischargedPatients() {
       patient.phone || '',
       patient.email || '',
       patient.blood_group || '',
-      patient.discharge_date ? new Date(patient.discharge_date).toLocaleDateString() : ''
+      patient.discharge_date ? new Date(patient.discharge_date).toLocaleDateString() : '',
+      patient.discharge_status || '',
+      patient.discharge_notes || ''
     ]);
 
     const csvContent = [
@@ -233,6 +237,9 @@ export function DischargedPatients() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
                   Discharge Date
                 </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
+                  Discharge Status
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
                   Actions
                 </th>
@@ -286,6 +293,11 @@ export function DischargedPatients() {
                         <Calendar className="w-3 h-3 mr-1 text-gray-400" />
                         {patient.discharge_date ? new Date(patient.discharge_date).toLocaleDateString() : 'N/A'}
                       </div>
+                    </td>
+                    <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
+                      <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-400 capitalize">
+                        {patient.discharge_status || 'N/A'}
+                      </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium border-b border-gray-200 dark:border-gray-700">
                       <button
@@ -372,6 +384,18 @@ export function DischargedPatients() {
                   <div className="text-sm text-gray-900 dark:text-white flex items-center">
                     <Calendar className="w-4 h-4 mr-2 text-gray-400" />
                     {selectedPatient.discharge_date ? new Date(selectedPatient.discharge_date).toLocaleDateString() : 'N/A'}
+                  </div>
+                </div>
+                <div className="md:col-span-1">
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Discharge Status</label>
+                  <div className="text-sm text-gray-900 dark:text-white capitalize">
+                    {selectedPatient.discharge_status || 'N/A'}
+                  </div>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Discharge Notes</label>
+                  <div className="text-sm text-gray-900 dark:text-white p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    {selectedPatient.discharge_notes || 'No notes provided'}
                   </div>
                 </div>
               </div>

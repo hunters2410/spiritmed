@@ -12,7 +12,8 @@ interface Patient {
   phone: string;
   email: string;
   blood_group: string;
-  death_date: string;
+  deceased_date: string;
+  deceased_reason: string;
   address: string;
   created_at: string;
 }
@@ -42,7 +43,7 @@ export function DeceasedPatients() {
         .from('patients')
         .select('*')
         .eq('status', 'deceased')
-        .order('death_date', { ascending: false });
+        .order('deceased_date', { ascending: false });
 
       if (profile.role !== 'super_admin') {
         query = query.eq('branch_id', profile.branch_id);
@@ -69,7 +70,8 @@ export function DeceasedPatients() {
       patient.phone || '',
       patient.email || '',
       patient.blood_group || '',
-      patient.death_date ? new Date(patient.death_date).toLocaleDateString() : ''
+      patient.deceased_date ? new Date(patient.deceased_date).toLocaleDateString() : '',
+      patient.deceased_reason || ''
     ]);
 
     const csvContent = [
@@ -231,7 +233,10 @@ export function DeceasedPatients() {
                   Blood Group
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
-                  Death Date
+                  Deceased Date
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
+                  Reason for Death
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
                   Actions
@@ -284,7 +289,12 @@ export function DeceasedPatients() {
                     <td className="px-6 py-4 whitespace-nowrap border-b border-r border-gray-200 dark:border-gray-700">
                       <div className="text-sm text-gray-900 dark:text-white flex items-center">
                         <Calendar className="w-3 h-3 mr-1 text-gray-400" />
-                        {patient.death_date ? new Date(patient.death_date).toLocaleDateString() : 'N/A'}
+                        {patient.deceased_date ? new Date(patient.deceased_date).toLocaleDateString() : 'N/A'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
+                      <div className="text-sm text-gray-900 dark:text-white max-w-xs truncate" title={patient.deceased_reason}>
+                        {patient.deceased_reason || 'N/A'}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium border-b border-gray-200 dark:border-gray-700">
@@ -368,10 +378,16 @@ export function DeceasedPatients() {
                   <div className="text-sm text-gray-900 dark:text-white">{selectedPatient.address || 'N/A'}</div>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Death Date</label>
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Deceased Date</label>
                   <div className="text-sm text-gray-900 dark:text-white flex items-center">
                     <Calendar className="w-4 h-4 mr-2 text-gray-400" />
-                    {selectedPatient.death_date ? new Date(selectedPatient.death_date).toLocaleDateString() : 'N/A'}
+                    {selectedPatient.deceased_date ? new Date(selectedPatient.deceased_date).toLocaleDateString() : 'N/A'}
+                  </div>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Reason for Death</label>
+                  <div className="text-sm text-gray-900 dark:text-white p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    {selectedPatient.deceased_reason || 'No reason provided'}
                   </div>
                 </div>
               </div>

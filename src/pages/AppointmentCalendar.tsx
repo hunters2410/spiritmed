@@ -34,7 +34,8 @@ export function AppointmentCalendar() {
         appointment_date: '',
         duration_minutes: 30,
         appointment_type: 'consultation',
-        notes: ''
+        notes: '',
+        status: 'pending_confirmation'
     });
 
     useEffect(() => {
@@ -127,7 +128,8 @@ export function AppointmentCalendar() {
                 appointment_date: '',
                 duration_minutes: 30,
                 appointment_type: 'consultation',
-                notes: ''
+                notes: '',
+                status: 'pending_confirmation'
             });
             loadAppointments();
         } catch (error) {
@@ -247,10 +249,11 @@ export function AppointmentCalendar() {
                                             key={apt.id}
                                             className={`text-xs p-1.5 rounded border truncate cursor-pointer ${apt.status === 'confirmed' ? 'bg-green-100 border-green-200 text-green-800' :
                                                 apt.status === 'pending_confirmation' ? 'bg-yellow-100 border-yellow-200 text-yellow-800' :
-                                                    apt.status === 'completed' ? 'bg-blue-100 border-blue-200 text-blue-800' :
-                                                        'bg-gray-100 border-gray-200 text-gray-800'
+                                                    apt.status === 'treated' || apt.status === 'completed' ? 'bg-blue-100 border-blue-200 text-blue-800' :
+                                                        apt.status === 'cancelled' ? 'bg-red-100 border-red-200 text-red-800' :
+                                                            'bg-gray-100 border-gray-200 text-gray-800'
                                                 }`}
-                                            title={`${formatTime(apt.appointment_date)} - ${apt.patients.full_name} (${apt.status})`}
+                                            title={`${formatTime(apt.appointment_date)} - ${apt.patients.full_name} (${apt.status === 'treated' ? 'Treated' : apt.status.replace('_', ' ')})${apt.status === 'cancelled' && (apt as any).cancellation_reason ? ` - Reason: ${(apt as any).cancellation_reason}` : ''}`}
                                         >
                                             <span className="font-semibold">{formatTime(apt.appointment_date)}</span> {apt.patients.full_name}
                                         </div>
@@ -343,6 +346,19 @@ export function AppointmentCalendar() {
                                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
                                     rows={3}
                                 />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                                <select
+                                    value={formData.status}
+                                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+                                >
+                                    <option value="pending_confirmation">Pending Confirmation</option>
+                                    <option value="confirmed">Confirmed</option>
+                                    <option value="treated">Treated</option>
+                                    <option value="cancelled">Cancelled</option>
+                                </select>
                             </div>
                             <div className="flex space-x-3 mt-6">
                                 <button

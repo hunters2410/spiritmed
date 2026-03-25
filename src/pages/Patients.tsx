@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2 } from 'lucide-react';
+import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2, HeartPulse, Stethoscope, Skull, LogOut, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Patient {
   id: string;
@@ -29,7 +29,6 @@ interface MedicalAid {
 interface ReferralDoctor {
   id: string;
   full_name: string;
-  specialization: string;
 }
 
 export function Patients() {
@@ -40,12 +39,22 @@ export function Patients() {
   const [referralDoctors, setReferralDoctors] = useState<ReferralDoctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
   const [showModal, setShowModal] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [currentTab, setCurrentTab] = useState('personal');
   const [filters, setFilters] = useState({
     gender: 'all',
     bloodGroup: 'all'
+  });
+  const [showDeceasedModal, setShowDeceasedModal] = useState(false);
+  const [showDischargedModal, setShowDischargedModal] = useState(false);
+  const [selectedPatientForStatus, setSelectedPatientForStatus] = useState<Patient | null>(null);
+  const [statusFormData, setStatusFormData] = useState({
+    date: new Date().toISOString().split('T')[0],
+    reason: '',
+    notes: ''
   });
   const [editingPatient, setEditingPatient] = useState<any>(null);
   const [formData, setFormData] = useState({
@@ -167,7 +176,7 @@ export function Patients() {
     try {
       let query = supabase
         .from('referral_doctors')
-        .select('id, full_name, specialization')
+        .select('id, full_name')
         .eq('is_active', true);
 
       if (profile.role !== 'super_admin') {
@@ -329,6 +338,50 @@ export function Patients() {
     }
   };
 
+  const handleUpdateStatus = async (status: 'deceased' | 'discharged') => {
+    if (!selectedPatientForStatus) return;
+
+    try {
+      setLoading(true);
+      const updateData: any = {
+        status: status,
+        updated_at: new Date().toISOString()
+      };
+
+      if (status === 'deceased') {
+        updateData.deceased_date = statusFormData.date;
+        updateData.deceased_reason = statusFormData.reason;
+      } else if (status === 'discharged') {
+        updateData.discharged_date = statusFormData.date;
+        updateData.discharge_status = statusFormData.reason; // We use the reason field for the status selection
+        updateData.discharge_notes = statusFormData.notes;
+      }
+
+      const { error } = await supabase
+        .from('patients')
+        .update(updateData)
+        .eq('id', selectedPatientForStatus.id);
+
+      if (error) throw error;
+
+      alert(`Patient marked as ${status} successfully`);
+      setShowDeceasedModal(false);
+      setShowDischargedModal(false);
+      setSelectedPatientForStatus(null);
+      setStatusFormData({
+        date: new Date().toISOString().split('T')[0],
+        reason: '',
+        notes: ''
+      });
+      loadPatients();
+    } catch (error) {
+      console.error(`Error updating patient status to ${status}:`, error);
+      alert(`Failed to mark patient as ${status}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const exportToCSV = () => {
     const headers = ['Patient Number', 'Full Name', 'Age', 'Gender', 'Phone', 'Email', 'Blood Group', 'Registration Date'];
     const csvData = filteredPatients.map(patient => [
@@ -367,6 +420,9 @@ export function Patients() {
 
     return matchesSearch && matchesGender && matchesBloodGroup;
   });
+
+  const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
+  const paginated = filteredPatients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const getAge = (dob: string) => {
     const today = new Date();
@@ -411,7 +467,7 @@ export function Patients() {
               type="text"
               placeholder="Search patients by name, ID, or phone..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />
           </div>
@@ -440,7 +496,7 @@ export function Patients() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Gender</label>
                 <select
                   value={filters.gender}
-                  onChange={(e) => setFilters({ ...filters, gender: e.target.value })}
+                  onChange={(e) => { setFilters({ ...filters, gender: e.target.value }); setCurrentPage(1); }}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 >
                   <option value="all">All Genders</option>
@@ -453,7 +509,7 @@ export function Patients() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Blood Group</label>
                 <select
                   value={filters.bloodGroup}
-                  onChange={(e) => setFilters({ ...filters, bloodGroup: e.target.value })}
+                  onChange={(e) => { setFilters({ ...filters, bloodGroup: e.target.value }); setCurrentPage(1); }}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 >
                   <option value="all">All Blood Groups</option>
@@ -469,7 +525,7 @@ export function Patients() {
               </div>
               <div className="flex items-end">
                 <button
-                  onClick={() => setFilters({ gender: 'all', bloodGroup: 'all' })}
+                  onClick={() => { setFilters({ gender: 'all', bloodGroup: 'all' }); setCurrentPage(1); }}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition"
                 >
                   Clear Filters
@@ -506,17 +562,20 @@ export function Patients() {
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {filteredPatients.length === 0 ? (
+              {paginated.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                     No patients found
                   </td>
                 </tr>
               ) : (
-                filteredPatients.map((patient) => (
+                paginated.map((patient, idx) => (
                   <tr key={patient.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
+                        <div className="text-gray-400 font-mono text-[10px] mr-3">
+                          {(currentPage - 1) * itemsPerPage + idx + 1}
+                        </div>
                         <div className="w-10 h-10 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
                           <span className="text-green-600 dark:text-green-400 font-medium text-sm">
                             {patient.full_name.charAt(0).toUpperCase()}
@@ -562,6 +621,20 @@ export function Patients() {
                         <button className="text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300">
                           <Eye className="w-4 h-4" />
                         </button>
+                        <button
+                          onClick={() => window.location.href = `/consultations?patientId=${patient.id}`}
+                          className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300"
+                          title="Start Consultation"
+                        >
+                          <Stethoscope className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => window.location.href = `/vital-signs?patientId=${patient.id}`}
+                          className="text-rose-600 dark:text-rose-400 hover:text-rose-900 dark:hover:text-rose-300"
+                          title="Record Vitals"
+                        >
+                          <HeartPulse className="w-4 h-4" />
+                        </button>
                         <button className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300">
                           <FileText className="w-4 h-4" />
                         </button>
@@ -570,6 +643,26 @@ export function Patients() {
                           className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300"
                         >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPatientForStatus(patient);
+                            setShowDeceasedModal(true);
+                          }}
+                          className="text-gray-900 dark:text-gray-100 hover:text-red-600 dark:hover:text-red-400"
+                          title="Mark Deceased"
+                        >
+                          <Skull className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPatientForStatus(patient);
+                            setShowDischargedModal(true);
+                          }}
+                          className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300"
+                          title="Mark Discharged"
+                        >
+                          <LogOut className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(patient.id, patient.full_name)}
@@ -585,6 +678,42 @@ export function Patients() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+            <p className="text-xs text-gray-500">
+              Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredPatients.length)} of {filteredPatients.length}
+            </p>
+            <div className="flex gap-2">
+              <button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage(p => p - 1)}
+                className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition"
+              >
+                <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+              </button>
+              <div className="flex gap-1">
+                {[...Array(totalPages)].map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentPage(i + 1)}
+                    className={`w-8 h-8 rounded-lg text-xs font-bold transition ${currentPage === i + 1 ? 'bg-green-600 text-white' : 'border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700'}`}
+                  >
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+              <button
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage(p => p + 1)}
+                className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition"
+              >
+                <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {showModal && (
@@ -884,7 +1013,7 @@ export function Patients() {
                       <option value="">Select Referral Doctor</option>
                       {referralDoctors.map(doctor => (
                         <option key={doctor.id} value={doctor.id}>
-                          {doctor.full_name} - {doctor.specialization}
+                          {doctor.full_name}
                         </option>
                       ))}
                     </select>
@@ -1095,6 +1224,135 @@ export function Patients() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showDeceasedModal && selectedPatientForStatus && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <Skull className="w-6 h-6 text-red-600" />
+                Mark Patient as Deceased
+              </h2>
+              <button onClick={() => setShowDeceasedModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              Patient: <span className="font-bold text-gray-900 dark:text-white">{selectedPatientForStatus.full_name} ({selectedPatientForStatus.patient_number})</span>
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Date of Death *</label>
+                <input
+                  type="date"
+                  value={statusFormData.date}
+                  onChange={(e) => setStatusFormData({ ...statusFormData, date: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-red-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reason for Death *</label>
+                <textarea
+                  value={statusFormData.reason}
+                  onChange={(e) => setStatusFormData({ ...statusFormData, reason: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-red-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  rows={3}
+                  placeholder="Enter reason or cause of death..."
+                  required
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => setShowDeceasedModal(false)}
+                  className="flex-1 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleUpdateStatus('deceased')}
+                  disabled={loading}
+                  className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-md disabled:opacity-50"
+                >
+                  {loading ? 'Saving...' : 'Confirm Deceased'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDischargedModal && selectedPatientForStatus && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <LogOut className="w-6 h-6 text-orange-600" />
+                Discharge Patient
+              </h2>
+              <button onClick={() => setShowDischargedModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              Patient: <span className="font-bold text-gray-900 dark:text-white">{selectedPatientForStatus.full_name} ({selectedPatientForStatus.patient_number})</span>
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Discharge Date *</label>
+                <input
+                  type="date"
+                  value={statusFormData.date}
+                  onChange={(e) => setStatusFormData({ ...statusFormData, date: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Discharge Status *</label>
+                <select
+                  value={statusFormData.reason} // Using reason field for discharge status type
+                  onChange={(e) => setStatusFormData({ ...statusFormData, reason: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  required
+                >
+                  <option value="">Select status</option>
+                  <option value="recovered">Recovered</option>
+                  <option value="improved">Improved</option>
+                  <option value="transferred">Transferred to another facility</option>
+                  <option value="self_discharged">Self-Discharged / AMA</option>
+                  <option value="referred">Referred for specialized care</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Additional Notes</label>
+                <textarea
+                  value={statusFormData.notes}
+                  onChange={(e) => setStatusFormData({ ...statusFormData, notes: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  rows={3}
+                  placeholder="Enter additional discharge notes..."
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => setShowDischargedModal(false)}
+                  className="flex-1 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleUpdateStatus('discharged')}
+                  disabled={loading}
+                  className="flex-1 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-bold shadow-md disabled:opacity-50"
+                >
+                  {loading ? 'Processing...' : 'Complete Discharge'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

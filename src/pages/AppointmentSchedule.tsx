@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Save, Calendar, Clock, User, Check } from 'lucide-react';
+import { Save, Calendar, Clock, User, Check, Trash2, PlusCircle } from 'lucide-react';
 
 export function AppointmentSchedule() {
     const { profile } = useAuth();
@@ -9,9 +9,10 @@ export function AppointmentSchedule() {
     const [doctors, setDoctors] = useState<any[]>([]);
     const [selectedDoctor, setSelectedDoctor] = useState('');
 
+    const [holidays, setHolidays] = useState<any[]>([]);
+    const [newHoliday, setNewHoliday] = useState({ name: '', date: '' });
+
     const [scheduleConfig, setScheduleConfig] = useState({
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setDate(new Date().getDate() + 30)).toISOString().split('T')[0],
         daysOfWeek: {
             0: false, // Sunday
             1: true,  // Monday
@@ -55,13 +56,12 @@ export function AppointmentSchedule() {
                     daysMap[record.day_of_week] = record.is_active;
                 });
 
-                setScheduleConfig(prev => ({
-                    ...prev,
-                    daysOfWeek: daysMap,
-                    startTime: firstRecord.start_time.slice(0, 5), // HH:MM:SS -> HH:MM
+                setScheduleConfig({
+                    daysOfWeek: daysMap as any,
+                    startTime: firstRecord.start_time.slice(0, 5),
                     endTime: firstRecord.end_time.slice(0, 5),
                     duration: firstRecord.slot_duration
-                }));
+                });
             }
         } catch (error) {
             console.error('Error loading availability:', error);
@@ -72,7 +72,53 @@ export function AppointmentSchedule() {
 
     useEffect(() => {
         loadDoctors();
+        loadHolidays();
     }, [profile]);
+
+    const loadHolidays = async () => {
+        if (!profile?.branch_id) return;
+        const { data, error } = await supabase
+            .from('holidays')
+            .select('*')
+            .eq('branch_id', profile.branch_id)
+            .order('holiday_date', { ascending: true });
+
+        if (!error) setHolidays(data || []);
+    };
+
+    const addHoliday = async () => {
+        if (!newHoliday.name || !newHoliday.date) return;
+        try {
+            const { error } = await supabase
+                .from('holidays')
+                .insert([{
+                    name: newHoliday.name,
+                    holiday_date: newHoliday.date,
+                    branch_id: profile?.branch_id
+                }]);
+
+            if (error) throw error;
+            setNewHoliday({ name: '', date: '' });
+            loadHolidays();
+        } catch (error) {
+            console.error('Error adding holiday:', error);
+            alert('Failed to add holiday');
+        }
+    };
+
+    const deleteHoliday = async (id: string) => {
+        try {
+            const { error } = await supabase
+                .from('holidays')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+            loadHolidays();
+        } catch (error) {
+            console.error('Error deleting holiday:', error);
+        }
+    };
 
     const loadDoctors = async () => {
         if (!profile?.branch_id) return;
@@ -146,15 +192,20 @@ export function AppointmentSchedule() {
 
             // 2. Generate and Insert Slots
             const slots = [];
-            let currentDate = new Date(scheduleConfig.startDate);
-            const endDate = new Date(scheduleConfig.endDate);
+            let currentDate = new Date();
+            const endDate = new Date();
+            endDate.setDate(endDate.getDate() + 90); // Generate for 90 days
+
+            // Convert holidays to a set of strings for easy lookup
+            const holidayDates = new Set(holidays.map(h => h.holiday_date));
 
             while (currentDate <= endDate) {
+                const dateStr = currentDate.toISOString().split('T')[0];
                 const dayOfWeek = currentDate.getDay();
-                // @ts-ignore
-                if (scheduleConfig.daysOfWeek[dayOfWeek]) {
-                    const dateStr = currentDate.toISOString().split('T')[0];
 
+                // Check if this day is a selected work day AND NOT a holiday
+                // @ts-ignore
+                if (scheduleConfig.daysOfWeek[dayOfWeek] && !holidayDates.has(dateStr)) {
                     let slotTime = new Date(`${dateStr}T${scheduleConfig.startTime}`);
                     const dayEndTime = new Date(`${dateStr}T${scheduleConfig.endTime}`);
 
@@ -315,6 +366,68 @@ export function AppointmentSchedule() {
                             </div>
                         </div>
                     </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                            <Calendar className="w-5 h-5 mr-2 text-gray-500" />
+                            Holiday Management
+                        </h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Holiday Name</label>
+                                <input
+                                    type="text"
+                                    value={newHoliday.name}
+                                    onChange={(e) => setNewHoliday({ ...newHoliday, name: e.target.value })}
+                                    placeholder="e.g. Christmas Day"
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                                <div className="flex space-x-2">
+                                    <input
+                                        type="date"
+                                        value={newHoliday.date}
+                                        onChange={(e) => setNewHoliday({ ...newHoliday, date: e.target.value })}
+                                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
+                                    />
+                                    <button
+                                        onClick={addHoliday}
+                                        className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition flex items-center space-x-1"
+                                    >
+                                        <PlusCircle className="w-5 h-5" />
+                                        <span>Add</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="border-t border-gray-100 pt-4">
+                            <h3 className="text-sm font-medium text-gray-700 mb-3">Planned Holidays</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {holidays.map((holiday) => (
+                                    <div key={holiday.id} className="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg">
+                                        <div>
+                                            <div className="font-medium text-red-900">{holiday.name}</div>
+                                            <div className="text-xs text-red-600">{new Date(holiday.holiday_date).toLocaleDateString()}</div>
+                                        </div>
+                                        <button
+                                            onClick={() => deleteHoliday(holiday.id)}
+                                            className="p-1.5 text-red-400 hover:text-red-600 transition"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                ))}
+                                {holidays.length === 0 && (
+                                    <div className="col-span-full text-center py-4 text-gray-500 italic text-sm">
+                                        No holidays added yet
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 {/* Summary Panel */}
@@ -323,26 +436,9 @@ export function AppointmentSchedule() {
                         <h2 className="text-lg font-semibold text-gray-900 mb-4">Summary</h2>
                         <div className="space-y-4">
                             <div className="p-4 bg-blue-50 rounded-lg border border-blue-100">
-                                <div className="text-sm text-blue-800 font-medium">Effectiveness Date Range</div>
-                                <div className="grid grid-cols-1 gap-2 mt-2">
-                                    <div>
-                                        <label className="block text-xs text-blue-600 mb-1">Start Date</label>
-                                        <input
-                                            type="date"
-                                            value={scheduleConfig.startDate}
-                                            onChange={(e) => setScheduleConfig({ ...scheduleConfig, startDate: e.target.value })}
-                                            className="w-full px-2 py-1 border border-blue-200 rounded text-sm focus:outline-none focus:border-blue-400"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-blue-600 mb-1">End Date</label>
-                                        <input
-                                            type="date"
-                                            value={scheduleConfig.endDate}
-                                            onChange={(e) => setScheduleConfig({ ...scheduleConfig, endDate: e.target.value })}
-                                            className="w-full px-2 py-1 border border-blue-200 rounded text-sm focus:outline-none focus:border-blue-400"
-                                        />
-                                    </div>
+                                <div className="text-sm text-blue-800 font-medium italic">Automatic Generation</div>
+                                <div className="text-xs text-blue-600 mt-1">
+                                    Scheduling now generates slots for the next 90 days based on your weekly configuration, automatically skipping defined holidays.
                                 </div>
                             </div>
 
