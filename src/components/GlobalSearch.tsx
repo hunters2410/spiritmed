@@ -16,25 +16,27 @@ interface NavItem {
   label: string;
   path: string;
 }
-
 const navigationItems: NavItem[] = [
   { label: 'Dashboard', path: '/dashboard' },
   { label: 'Branches', path: '/branches' },
   { label: 'All Patients', path: '/patients' },
-  { label: 'Deceased Patients', path: '/patients/deceased' },
-  { label: 'Discharged Patients', path: '/patients/discharged' },
-  { label: 'Patient Files', path: '/patient-files' },
-  { label: 'Appointments', path: '/appointments' },
-  { label: 'Doctors', path: '/doctors' },
-  { label: 'Nurses', path: '/nurses' },
-  { label: 'Receptionists', path: '/receptionists' },
-  { label: 'Accountants', path: '/accountants' },
-  { label: 'Attendance', path: '/attendance' },
-  { label: 'Leave Management', path: '/leave-management' },
-  { label: 'Roles', path: '/roles' },
-  { label: 'Payroll', path: '/payroll' },
-  { label: 'Human Resources', path: '/human-resources' },
-  { label: 'User Management', path: '/users' },
+  { label: 'Consultations', path: '/consultations' },
+  { label: 'Prescriptions', path: '/prescriptions' },
+  { label: 'Lab Results', path: '/lab-results' },
+  { label: 'Medical Reports', path: '/medical-reports' },
+  { label: 'Discharge Summaries', path: '/discharge-summaries' },
+  { label: 'Referral Forms', path: '/referral-forms' },
+  { label: 'Operation Reports', path: '/operation-reports' },
+  { label: 'Medical Certificates', path: '/medical-certificates' },
+  { label: 'Admission Letters', path: '/admission-letters' },
+  { label: 'Medicines', path: '/medicines' },
+  { label: 'Complaints', path: '/complaints' },
+  { label: 'Investigations', path: '/investigations' },
+  { label: 'Diagnoses', path: '/diagnoses' },
+  { label: 'Histology', path: '/histology' },
+  { label: 'Anaesthetists', path: '/anaesthetists' },
+  { label: 'Assistants', path: '/assistants' },
+  { label: 'Hospitals', path: '/hospitals' },
   { label: 'Profile', path: '/profile' },
   { label: 'Settings', path: '/settings' }
 ];
@@ -176,16 +178,19 @@ export function GlobalSearch() {
 
         if (appointments) {
           appointments
-            .filter(apt =>
-              apt.patients?.full_name?.toLowerCase().includes(query.toLowerCase()) ||
-              apt.users?.full_name?.toLowerCase().includes(query.toLowerCase())
-            )
+            .filter(apt => {
+              const pName = Array.isArray(apt.patients) ? apt.patients[0]?.full_name : (apt.patients as any)?.full_name;
+              const dName = Array.isArray(apt.users) ? apt.users[0]?.full_name : (apt.users as any)?.full_name;
+              return pName?.toLowerCase().includes(query.toLowerCase()) || dName?.toLowerCase().includes(query.toLowerCase());
+            })
             .forEach(appointment => {
+              const pName = Array.isArray(appointment.patients) ? appointment.patients[0]?.full_name : (appointment.patients as any)?.full_name;
+              const dName = Array.isArray(appointment.users) ? appointment.users[0]?.full_name : (appointment.users as any)?.full_name;
               searchResults.push({
                 id: appointment.id,
                 type: 'appointment',
-                title: `Appointment - ${appointment.patients?.full_name || 'Unknown'}`,
-                subtitle: `Dr. ${appointment.users?.full_name || 'Unknown'} • ${new Date(appointment.appointment_date).toLocaleDateString()} ${appointment.appointment_time}`,
+                title: `Appointment - ${pName || 'Unknown'}`,
+                subtitle: `Dr. ${dName || 'Unknown'} • ${new Date(appointment.appointment_date).toLocaleDateString()} ${appointment.appointment_time}`,
                 icon: Calendar,
                 path: '/appointments'
               });

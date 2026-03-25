@@ -114,13 +114,13 @@ export function Layout({ children }: LayoutProps) {
     {
       title: 'Clinical Setup',
       items: [
-        { label: 'Complaints', icon: MessageSquare, path: '/complaints', roles: ['admin', 'doctor'] },
-        { label: 'Investigations', icon: Microscope, path: '/investigations', roles: ['admin', 'doctor'] },
-        { label: 'Diagnoses', icon: Activity, path: '/diagnoses', roles: ['admin', 'doctor'] },
-        { label: 'Histology', icon: FlaskConical, path: '/histology', roles: ['admin', 'doctor'] },
-        { label: 'Anaesthetists', icon: UserCheck, path: '/anaesthetists', roles: ['admin', 'doctor'] },
-        { label: 'Assistants', icon: UserPlus, path: '/assistants', roles: ['admin', 'doctor'] },
-        { label: 'Hospitals', icon: Building2, path: '/hospitals', roles: ['admin', 'doctor'] },
+        { label: 'Complaints', icon: MessageSquare, path: '/complaints', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Investigations', icon: Microscope, path: '/investigations', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Diagnoses', icon: Activity, path: '/diagnoses', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Histology', icon: FlaskConical, path: '/histology', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Anaesthetists', icon: UserCheck, path: '/anaesthetists', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Assistants', icon: UserPlus, path: '/assistants', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Hospitals', icon: Building2, path: '/hospitals', roles: ['super_admin', 'admin', 'doctor'] },
       ]
     },
     {
