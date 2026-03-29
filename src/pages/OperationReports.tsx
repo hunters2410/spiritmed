@@ -127,19 +127,22 @@ export default function OperationReports() {
                 supabase.from('hospitals').select('*').eq('branch_id', profile?.branch_id).order('name'),
                 supabase.from('anaesthetists').select('*').eq('branch_id', profile?.branch_id).order('full_name'),
                 supabase.from('assistants').select('*').eq('branch_id', profile?.branch_id).order('full_name'),
-                supabase.from('users').select('id, full_name, specialization, qualifications').eq('role', 'doctor').eq('is_active', true).order('full_name'),
+                supabase.from('users').select('id, full_name').eq('branch_id', profile?.branch_id).eq('role', 'doctor').eq('is_active', true).order('full_name'),
                 supabase.from('surgical_procedures').select('*').eq('branch_id', profile?.branch_id).order('name')
             ]);
 
-            setReports(forRes.data || []);
-            setPatients(patRes.data || []);
-            setHospitals(hospRes.data || []);
-            setAnaesthetists(anaRes.data || []);
-            setAssistants(astRes.data || []);
-            setDoctors(docRes.data || []);
-            setProcedures(prcRes.data || []);
+            if (!forRes.error) setReports(forRes.data || []);
+            if (!patRes.error) setPatients(patRes.data || []);
+            if (!hospRes.error) setHospitals(hospRes.data || []);
+            if (!anaRes.error) setAnaesthetists(anaRes.data || []);
+            if (!astRes.error) setAssistants(astRes.data || []);
+            if (!docRes.error) setDoctors(docRes.data || []);
+            if (!prcRes.error) setProcedures(prcRes.data || []);
+
+            // Log errors if any
+            if (docRes.error) console.error('Error loading doctors:', docRes.error);
         } catch (e) {
-            console.error(e);
+            console.error('Operation Reports loadAll full error:', e);
         } finally {
             setLoading(false);
         }
@@ -502,7 +505,7 @@ export default function OperationReports() {
                         <form onSubmit={handleCreatePatient} className="p-6 space-y-4">
                             <div>
                                 <label className={labelCls}>Full Name</label>
-                                <input required type="text" placeholder="John Doe" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
+                                <input required type="text" placeholder="Collen Hunters" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
                             </div>
                             <div>
                                 <label className={labelCls}>Gender</label>

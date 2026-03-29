@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import {
-    MapPin, CheckCircle, AlertCircle, Calendar, ShieldCheck, UserPlus, UserCheck, Search
+    CheckCircle, AlertCircle, Calendar, UserPlus, UserCheck, Search
 } from 'lucide-react';
 
 export function PublicBooking() {
@@ -68,28 +68,52 @@ export function PublicBooking() {
     };
 
     const loadDoctors = async () => {
-        const { data } = await supabase
-            .from('users')
-            .select('id, full_name, branch_id, branches(name)')
-            .eq('role', 'doctor')
-            .eq('is_active', true);
-        setDoctors(data || []);
+        try {
+            console.log('Fetching public doctors...');
+            const { data, error } = await supabase
+                .from('users')
+                .select('id, full_name, branch_id')
+                .eq('role', 'doctor')
+                .eq('is_active', true)
+                .order('full_name');
+            
+            if (error) {
+                console.error('Supabase doctor fetch error:', error);
+                // Try a fallback if standard query fails (RLS check)
+                if (error.code === 'PGRST301' || error.message.includes('permission denied')) {
+                   console.warn('RLS policy detected. Public access to "users" table may be restricted.');
+                }
+            }
+            console.log('Doctors loaded:', data?.length || 0);
+            setDoctors(data || []);
+        } catch (err) {
+            console.error('Unexpected error loading doctors:', err);
+        }
     };
 
     const loadSlots = async (doctorId: string) => {
-        const start = `${selectedDate}T00:00:00`;
-        const end = `${selectedDate}T23:59:59`;
+        try {
+            const start = `${selectedDate}T00:00:00`;
+            const end = `${selectedDate}T23:59:59`;
 
-        const { data } = await supabase
-            .from('appointment_slots')
-            .select('*')
-            .eq('doctor_id', doctorId)
-            .eq('is_booked', false)
-            .gte('start_time', start)
-            .lte('start_time', end)
-            .order('start_time', { ascending: true });
+            console.log(`Fetching slots for doctor ${doctorId} on ${selectedDate}...`);
+            const { data, error } = await supabase
+                .from('appointment_slots')
+                .select('*')
+                .eq('doctor_id', doctorId)
+                .eq('is_booked', false)
+                .gte('start_time', start)
+                .lte('start_time', end)
+                .order('start_time', { ascending: true });
 
-        setAvailableSlots(data || []);
+            if (error) {
+                console.error('Supabase slot fetch error:', error);
+            }
+            console.log('Slots loaded:', data?.length || 0);
+            setAvailableSlots(data || []);
+        } catch (err) {
+            console.error('Unexpected error loading slots:', err);
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {

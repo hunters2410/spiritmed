@@ -42,6 +42,7 @@ interface Consultation {
     treatment_plan?: string;
     patient: Patient;
     doctor: Doctor;
+    referral_doctor?: { full_name: string };
 }
 
 interface Props {
@@ -112,6 +113,9 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                         <p className="flex gap-2"><span className="font-bold uppercase w-32">Patient:</span> <span className="uppercase">{consultation.patient.full_name}</span></p>
                         <p className="flex gap-2"><span className="font-bold uppercase w-32">Gender:</span> <span className="uppercase">{consultation.patient.gender}</span></p>
                         <p className="flex gap-2"><span className="font-bold uppercase w-32">DOB:</span> <span>{new Date(consultation.patient.date_of_birth).toLocaleDateString()}</span></p>
+                        {consultation.referral_doctor?.full_name && (
+                            <p className="flex gap-2"><span className="font-bold uppercase w-32">Referred By:</span> <span className="uppercase">{consultation.referral_doctor.full_name}</span></p>
+                        )}
                     </div>
 
                     {/* Main Content Sections */}

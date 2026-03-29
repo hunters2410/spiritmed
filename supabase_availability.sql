@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS appointment_slots (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     doctor_id UUID REFERENCES auth.users(id) NOT NULL,
     branch_id UUID,
+    slot_date DATE NOT NULL,
     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     end_time TIMESTAMP WITH TIME ZONE NOT NULL,
     is_booked BOOLEAN DEFAULT false,

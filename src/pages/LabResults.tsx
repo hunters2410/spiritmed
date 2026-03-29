@@ -355,7 +355,7 @@ export default function LabResults() {
                             <button type="button" onClick={() => setShowPatientModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
                         </div>
                         <form onSubmit={handleAddPatient} className="p-6 space-y-4">
-                            <div><label className={labelCls}>Full Name *</label><input required value={newPatientForm.full_name} onChange={e => setNewPatientForm(p => ({ ...p, full_name: e.target.value }))} className={inputCls} placeholder="e.g. John Doe" autoFocus /></div>
+                            <div><label className={labelCls}>Full Name *</label><input required value={newPatientForm.full_name} onChange={e => setNewPatientForm(p => ({ ...p, full_name: e.target.value }))} className={inputCls} placeholder="e.g. Collen Hunters" autoFocus /></div>
                             <div><label className={labelCls}>Email</label><input type="email" value={newPatientForm.email} onChange={e => setNewPatientForm(p => ({ ...p, email: e.target.value }))} className={inputCls} placeholder="e.g. john@example.com" /></div>
                             <div>
                                 <label className={labelCls}>Gender *</label>

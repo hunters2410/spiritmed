@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Calendar as CalendarIcon, Clock, User, Edit, Check, Filter, Search } from 'lucide-react';
+import { Plus, Calendar as CalendarIcon, Clock, User, Edit, Check, Filter, Search, UserPlus, Users, Stethoscope } from 'lucide-react';
+import { logActivity } from '../utils/auditLogger';
+import { SearchDropdown } from '../components/SearchDropdown';
 
 interface Appointment {
   id: string;
@@ -62,6 +64,9 @@ export function Appointments() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [slotSearchQuery, setSlotSearchQuery] = useState('');
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
     loadAppointments();
@@ -84,9 +89,7 @@ export function Appointments() {
         .from('appointment_slots')
         .select('*')
         .eq('doctor_id', doctorId)
-        .eq('is_booked', false)
-        .gte('start_time', `${date}T00:00:00`)
-        .lte('start_time', `${date}T23:59:59`)
+        .eq('slot_date', date)
         .order('start_time', { ascending: true });
 
       if (error) throw error;
@@ -189,9 +192,21 @@ export function Appointments() {
 
       if (error) throw error;
 
-      if (data && data[0]) {
-        const createdPatient = data[0];
-        setPatients([...patients, createdPatient]);
+        if (data && data[0]) {
+            if (profile?.id && profile?.branch_id) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id,
+                    action: 'CREATE',
+                    tableName: 'patients',
+                    recordId: data[0].id,
+                    details: `Quick-added patient from appointments: ${newPatient.full_name}`,
+                    newValues: { ...newPatient, patient_number: patientNumber }
+                });
+            }
+            const createdPatient = data[0];
+            setPatients([...patients, createdPatient]);
+            // ... (rest of logic)
         setFormData({
           patient_id: createdPatient.id,
           doctor_id: '',
@@ -272,12 +287,25 @@ export function Appointments() {
 
         if (updateError) throw updateError;
 
+        if (profile?.id && profile?.branch_id) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: 'UPDATE',
+                tableName: 'appointments',
+                recordId: editingId,
+                details: `Updated appointment details for patient ID: ${formData.patient_id}`,
+                newValues: formData
+            });
+        }
+
         // Trigger notification if status changed to confirmed/cancelled
         if (oldAppointment && oldAppointment.status !== formData.status && (formData.status === 'confirmed' || formData.status === 'cancelled')) {
           sendNotification(formData.status as any, { ...oldAppointment, status: formData.status, cancellation_reason: formData.cancellation_reason });
         }
 
-        alert('Appointment updated successfully!');
+        setSuccessMessage('Appointment updated successfully!');
+        setShowSuccessModal(true);
       } else {
         // CREATE Logic
         if (!selectedSlotId) {
@@ -312,7 +340,21 @@ export function Appointments() {
           .eq('id', selectedSlotId);
 
         if (slotError) console.error('Error updating slot:', slotError);
-        alert('Appointment scheduled successfully!');
+
+        if (profile?.id && profile?.branch_id && appointmentData) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: 'CREATE',
+                tableName: 'appointments',
+                recordId: appointmentData.id,
+                details: `Scheduled new ${formData.appointment_type} appointment for patient ID ${formData.patient_id}`,
+                newValues: formData
+            });
+        }
+
+        setSuccessMessage('Appointment scheduled successfully!');
+        setShowSuccessModal(true);
       }
 
       setShowModal(false);
@@ -352,6 +394,18 @@ export function Appointments() {
         .eq('id', id);
 
       if (error) throw error;
+
+      if (profile?.id && profile?.branch_id) {
+          await logActivity(supabase, {
+              userId: profile.id,
+              branchId: profile.branch_id,
+              action: 'STATUS_CHANGE',
+              tableName: 'appointments',
+              recordId: id,
+              details: `Changed appointment status to ${newStatus.toUpperCase()}${reason ? ` (Reason: ${reason})` : ''}`,
+              newValues: updateData
+          });
+      }
 
       // Find the appointment to send notification
       const appointment = appointments.find(a => a.id === id);
@@ -632,44 +686,25 @@ export function Appointments() {
           <div className="bg-white rounded-xl max-w-md w-full p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4">{isEditing ? 'Edit Appointment' : 'Schedule New Appointment'}</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Patient</label>
-                <select
-                  value={formData.patient_id}
-                  onChange={(e) => {
-                    if (e.target.value === 'new') {
-                      setShowPatientModal(true);
-                    } else {
-                      setFormData({ ...formData, patient_id: e.target.value });
-                    }
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-                  required
-                >
-                  <option value="">Select Patient</option>
-                  <option value="new" className="font-bold text-green-600">+ Add New Patient</option>
-                  {patients.map((patient) => (
-                    <option key={patient.id} value={patient.id}>
-                      {patient.full_name} ({patient.patient_number})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Doctor</label>
-                <select
-                  value={formData.doctor_id}
-                  onChange={(e) => setFormData({ ...formData, doctor_id: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-                  required
-                >
-                  <option value="">Select Doctor</option>
-                  {doctors.map((doctor) => (
-                    <option key={doctor.id} value={doctor.id}>
-                      {doctor.full_name}
-                    </option>
-                  ))}
-                </select>
+              <div className="space-y-4">
+                <SearchDropdown
+                  label="Patient"
+                  placeholder="Search patient by name or number..."
+                  items={patients}
+                  selectedId={formData.patient_id}
+                  displayFn={(p) => `${p.full_name} (${p.patient_number})`}
+                  onSelect={(id) => setFormData({ ...formData, patient_id: id })}
+                  onAddNew={() => setShowPatientModal(true)}
+                  addNewLabel="Quick Add Patient"
+                />
+
+                <SearchDropdown
+                  label="Doctor"
+                  placeholder="Search doctor..."
+                  items={doctors}
+                  selectedId={formData.doctor_id}
+                  onSelect={(id) => setFormData({ ...formData, doctor_id: id })}
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Appointment Date</label>
@@ -683,50 +718,79 @@ export function Appointments() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Available Slots</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-gray-700">Available Slots</label>
+                  <div className="relative">
+                    <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search time..."
+                      value={slotSearchQuery}
+                      onChange={(e) => setSlotSearchQuery(e.target.value)}
+                      className="pl-7 pr-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-green-500 outline-none w-32 font-roboto"
+                    />
+                  </div>
+                </div>
                 {slotLoading ? (
                   <div className="flex items-center space-x-2 text-sm text-gray-500 py-2">
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600" />
                     <span>Loading slots...</span>
                   </div>
                 ) : !formData.doctor_id ? (
-                  <p className="text-sm text-gray-500 py-2 italic">Select a doctor to see availability</p>
+                  <p className="text-sm text-gray-500 py-2 italic font-roboto">Select a doctor to see availability</p>
                 ) : availableSlots.length === 0 ? (
-                  <p className="text-sm text-red-500 py-2 italic">No available slots for this date</p>
+                  <p className="text-sm text-red-500 py-2 italic font-roboto">No available slots for this date</p>
                 ) : (
-                  <div className="grid grid-cols-3 gap-2 mt-1 max-h-40 overflow-y-auto p-1">
-                    {availableSlots.map((slot) => (
-                      <button
-                        key={slot.id}
-                        type="button"
-                        onClick={() => setSelectedSlotId(slot.id)}
-                        className={`px-2 py-2 text-xs font-medium rounded-lg border transition ${selectedSlotId === slot.id
-                          ? 'bg-green-600 border-green-600 text-white shadow-sm'
-                          : 'bg-white border-gray-200 text-gray-700 hover:border-green-500 hover:text-green-600'
+                  <div className="grid grid-cols-3 gap-2 mt-1 max-h-40 overflow-y-auto p-1 border border-gray-100 rounded-lg">
+                    {availableSlots
+                      .filter(slot => 
+                        formatTime(slot.start_time).toLowerCase().includes(slotSearchQuery.toLowerCase())
+                      )
+                      .map((slot) => (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          onClick={() => {
+                            if (!slot.is_booked) {
+                              setSelectedSlotId(slot.id);
+                              const duration = (new Date(slot.end_time).getTime() - new Date(slot.start_time).getTime()) / 60000;
+                              setFormData(prev => ({ ...prev, duration_minutes: Math.round(duration) }));
+                            }
+                          }}
+                          disabled={slot.is_booked}
+                          className={`px-2 py-2 text-xs font-medium rounded-lg border transition font-roboto ${
+                            slot.is_booked
+                              ? 'bg-red-50 border-red-100 text-red-400 cursor-not-allowed opacity-75'
+                              : selectedSlotId === slot.id
+                                ? 'bg-green-600 border-green-600 text-white shadow-sm'
+                                : 'bg-white border-gray-200 text-gray-700 hover:border-green-500 hover:text-green-600'
                           }`}
-                      >
-                        {formatTime(slot.start_time)}
-                      </button>
-                    ))}
+                        >
+                          <div className="flex flex-col">
+                            <span>{formatTime(slot.start_time)}</span>
+                            {slot.is_booked && <span className="text-[8px] uppercase font-bold text-red-500 mt-1">Booked</span>}
+                          </div>
+                        </button>
+                      ))}
                   </div>
                 )}
                 {!selectedSlotId && availableSlots.length > 0 && (
-                  <p className="text-xs text-amber-600 mt-1">Please select a time slot</p>
+                  <p className="text-xs text-amber-600 mt-1 font-roboto italic">Please select a time slot</p>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
+                <div className="hidden">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Duration (mins)</label>
                   <input
                     type="number"
                     value={formData.duration_minutes}
                     onChange={(e) => setFormData({ ...formData, duration_minutes: parseInt(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none font-roboto"
                     min="15"
                     step="15"
                   />
                 </div>
-                <div>
+                <div className="col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
                   <select
                     value={formData.appointment_type}
@@ -919,6 +983,24 @@ export function Appointments() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Success Modal */}
+      {showSuccessModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl max-w-sm w-full p-6 text-center animate-in zoom-in-95 duration-200 shadow-2xl">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Check className="w-8 h-8 text-green-600" />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2 font-roboto">Success!</h3>
+            <p className="text-gray-600 mb-6 font-roboto">{successMessage}</p>
+            <button
+              onClick={() => setShowSuccessModal(false)}
+              className="w-full py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-bold hover:from-green-700 hover:to-emerald-700 transition shadow-md font-roboto"
+            >
+              Great, thanks!
+            </button>
           </div>
         </div>
       )}

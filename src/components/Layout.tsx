@@ -11,7 +11,7 @@ import {
   Folder, FolderOpen, CalendarCheck, Pill, HeartPulse, ScrollText,
   FileSignature, ClipboardCheck, Skull, UserMinus, CreditCard,
   Receipt, Wallet, Calculator, LayoutDashboard, Clock,
-  Globe, ShieldCheck, Zap, Search, UserPlus, FlaskConical
+  Globe, ShieldCheck, Zap, Search, UserPlus, FlaskConical, Layers, Ruler
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -119,6 +119,7 @@ export function Layout({ children }: LayoutProps) {
         { label: 'Diagnoses', icon: Activity, path: '/diagnoses', roles: ['super_admin', 'admin', 'doctor'] },
         { label: 'Histology', icon: FlaskConical, path: '/histology', roles: ['super_admin', 'admin', 'doctor'] },
         { label: 'Anaesthetists', icon: UserCheck, path: '/anaesthetists', roles: ['super_admin', 'admin', 'doctor'] },
+        { label: 'Surgical Procedures', icon: Activity, path: '/surgical-procedures', roles: ['super_admin', 'admin', 'doctor'] },
         { label: 'Assistants', icon: UserPlus, path: '/assistants', roles: ['super_admin', 'admin', 'doctor'] },
         { label: 'Hospitals', icon: Building2, path: '/hospitals', roles: ['super_admin', 'admin', 'doctor'] },
       ]
@@ -137,6 +138,9 @@ export function Layout({ children }: LayoutProps) {
       title: 'Inventory & Resources',
       items: [
         { label: 'Inventory', icon: Package, path: '/inventory', roles: ['admin', 'nurse'] },
+        { label: 'Suppliers', icon: Building2, path: '/suppliers', roles: ['admin'] },
+        { label: 'Inventory Categories', icon: Layers, path: '/inventory/categories', roles: ['admin'] },
+        { label: 'Inventory Units', icon: Ruler, path: '/inventory/units', roles: ['admin'] },
         { label: 'Hospital Files', icon: Folder, path: '/hospital-files', roles: ['admin'] },
       ]
     },

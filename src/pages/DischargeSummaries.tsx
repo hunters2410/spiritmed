@@ -368,7 +368,7 @@ export default function DischargeSummaries() {
                         <form onSubmit={handleCreatePatient} className="p-6 space-y-4">
                             <div>
                                 <label className={labelCls}>Full Name</label>
-                                <input required type="text" placeholder="John Doe" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
+                                <input required type="text" placeholder="Collen Hunters" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
                             </div>
                             <div>
                                 <label className={labelCls}>Gender</label>

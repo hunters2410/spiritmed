@@ -23,6 +23,7 @@ interface Doctor {
     signature_url?: string;
 }
 interface Diagnosis { id: string; name: string; icd10_code?: string; }
+interface SurgicalProcedure { id: string; name: string; description?: string; }
 
 interface AdmissionForm {
     id: string;
@@ -110,6 +111,9 @@ export default function AdmissionForms() {
     const [patients, setPatients] = useState<Patient[]>([]);
     const [diagnoses, setDiagnoses] = useState<Diagnosis[]>([]);
     const [hospitals, setHospitals] = useState<any[]>([]);
+    const [procedures, setProcedures] = useState<SurgicalProcedure[]>([]);
+    const [showProcedureModal, setShowProcedureModal] = useState(false);
+    const [newProcedureForm, setNewProcedureForm] = useState({ name: '', description: '' });
 
     useEffect(() => {
         if (profile?.branch_id) {
@@ -128,17 +132,19 @@ export default function AdmissionForms() {
     async function loadAll() {
         setLoading(true);
         try {
-            const [forRes, patRes, diaRes, hospRes] = await Promise.all([
+            const [forRes, patRes, diaRes, hospRes, proRes] = await Promise.all([
                 supabase.from('admission_forms').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), diagnosis:diagnoses(name), hospital:hospitals(name)').eq('branch_id', profile?.branch_id).order('created_at', { ascending: false }),
                 supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth').eq('branch_id', profile?.branch_id),
                 supabase.from('diagnoses').select('id, name, icd10_code').eq('branch_id', profile?.branch_id),
-                supabase.from('hospitals').select('*').eq('branch_id', profile?.branch_id).order('name')
+                supabase.from('hospitals').select('*').eq('branch_id', profile?.branch_id).order('name'),
+                supabase.from('surgical_procedures').select('id, name').eq('branch_id', profile?.branch_id).order('name')
             ]);
 
             setForms(forRes.data || []);
             setPatients(patRes.data || []);
             setDiagnoses(diaRes.data || []);
             setHospitals(hospRes.data || []);
+            setProcedures(proRes.data || []);
         } catch (e) {
             console.error(e);
         } finally {
@@ -240,6 +246,18 @@ export default function AdmissionForms() {
         const { error } = await supabase.from('admission_forms').delete().eq('id', id);
         if (error) alert(error.message);
         else loadAll();
+    }
+
+    async function handleCreateProcedure(e: React.FormEvent) {
+        e.preventDefault();
+        const { data, error } = await supabase.from('surgical_procedures').insert([{ ...newProcedureForm, branch_id: profile?.branch_id }]).select().single();
+        if (error) alert(error.message);
+        else {
+            setProcedures(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+            setForm(prev => ({ ...prev, procedure_text: data.name }));
+            setShowProcedureModal(false);
+            setNewProcedureForm({ name: '', description: '' });
+        }
     }
 
     async function handleCreatePatient(e: React.FormEvent) {
@@ -417,10 +435,19 @@ export default function AdmissionForms() {
                                     addNewLabel="Add New Diagnosis"
                                 />
 
-                                <div>
-                                    <label className={labelCls}>Surgical Procedure</label>
-                                    <input type="text" placeholder="Search Surgical Procedure" value={form.procedure_text} onChange={e => setForm({ ...form, procedure_text: e.target.value })} className={inputCls} />
-                                </div>
+                                <SearchDropdown
+                                    label="Surgical Procedure"
+                                    placeholder="Search Surgical Procedure"
+                                    items={procedures}
+                                    selectedId={procedures.find(p => p.name === form.procedure_text)?.id || ''}
+                                    onSelect={(id: string) => {
+                                        const p = procedures.find(proc => proc.id === id);
+                                        if (p) setForm({ ...form, procedure_text: p.name });
+                                    }}
+                                    displayFn={(p: any) => p.name}
+                                    onAddNew={() => setShowProcedureModal(true)}
+                                    addNewLabel="Add New Procedure"
+                                />
 
                                 <div>
                                     <label className={labelCls}>Date Of Procedure</label>
@@ -532,7 +559,7 @@ export default function AdmissionForms() {
                         <form onSubmit={handleCreatePatient} className="p-6 space-y-4">
                             <div>
                                 <label className={labelCls}>Full Name</label>
-                                <input required type="text" placeholder="John Doe" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
+                                <input required type="text" placeholder="Collen Hunters" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
                             </div>
                             <div>
                                 <label className={labelCls}>Gender</label>
@@ -608,6 +635,31 @@ export default function AdmissionForms() {
                             <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700">
                                 <button type="button" onClick={() => setShowHospitalModal(false)} className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition">Cancel</button>
                                 <button type="submit" className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition shadow-md">Save Hospital</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {showProcedureModal && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl w-full max-w-md shadow-2xl">
+                        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-indigo-50 dark:bg-indigo-900/20 rounded-t-xl">
+                            <h2 className="text-lg font-bold text-gray-900 dark:text-white">Add New Procedure</h2>
+                            <button onClick={() => setShowProcedureModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+                        </div>
+                        <form onSubmit={handleCreateProcedure} className="p-6 space-y-4">
+                            <div>
+                                <label className={labelCls}>Procedure Name</label>
+                                <input required value={newProcedureForm.name} onChange={e => setNewProcedureForm(p => ({ ...p, name: e.target.value }))} className={inputCls} placeholder="e.g. Appendectomy" />
+                            </div>
+                            <div>
+                                <label className={labelCls}>Description (Optional)</label>
+                                <textarea rows={2} value={newProcedureForm.description} onChange={e => setNewProcedureForm(p => ({ ...p, description: e.target.value }))} className={inputCls} placeholder="Details about the procedure..." />
+                            </div>
+                            <div className="flex gap-3 pt-2">
+                                <button type="button" onClick={() => setShowProcedureModal(false)} className="flex-1 py-2 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">Cancel</button>
+                                <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition">Save Procedure</button>
                             </div>
                         </form>
                     </div>

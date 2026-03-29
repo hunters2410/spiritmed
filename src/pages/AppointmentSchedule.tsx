@@ -11,6 +11,8 @@ export function AppointmentSchedule() {
 
     const [holidays, setHolidays] = useState<any[]>([]);
     const [newHoliday, setNewHoliday] = useState({ name: '', date: '' });
+    const [generatedSlots, setGeneratedSlots] = useState<any[]>([]);
+    const [slotSummary, setSlotSummary] = useState<Record<string, number>>({});
 
     const [scheduleConfig, setScheduleConfig] = useState({
         daysOfWeek: {
@@ -30,6 +32,7 @@ export function AppointmentSchedule() {
     useEffect(() => {
         if (selectedDoctor) {
             loadAvailability(selectedDoctor);
+            loadGeneratedSlots(selectedDoctor);
         }
     }, [selectedDoctor]);
 
@@ -62,9 +65,68 @@ export function AppointmentSchedule() {
                     endTime: firstRecord.end_time.slice(0, 5),
                     duration: firstRecord.slot_duration
                 });
+            } else {
+                // Reset to default if no availability found
+                setScheduleConfig({
+                    daysOfWeek: { 0: false, 1: true, 2: true, 3: true, 4: true, 5: true, 6: false },
+                    startTime: '09:00',
+                    endTime: '17:00',
+                    duration: 30
+                });
             }
         } catch (error) {
             console.error('Error loading availability:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const loadGeneratedSlots = async (doctorId: string) => {
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            const { data, error } = await supabase
+                .from('appointment_slots')
+                .select('slot_date, is_booked')
+                .eq('doctor_id', doctorId)
+                .gte('slot_date', today)
+                .order('slot_date', { ascending: true });
+
+            if (error) throw error;
+
+            // Group by date
+            const summary: Record<string, number> = {};
+            data?.forEach(slot => {
+                const dateS = slot.slot_date;
+                summary[dateS] = (summary[dateS] || 0) + 1;
+            });
+
+            setGeneratedSlots(data || []);
+            setSlotSummary(summary);
+        } catch (error) {
+            console.error('Error loading slots:', error);
+        }
+    };
+
+    const clearUpcomingSlots = async () => {
+        if (!selectedDoctor) return;
+        if (!confirm('Are you sure you want to delete all future unbooked slots for this doctor?')) return;
+
+        try {
+            setLoading(true);
+            const today = new Date().toISOString().split('T')[0];
+            const { error } = await supabase
+                .from('appointment_slots')
+                .delete()
+                .eq('doctor_id', selectedDoctor)
+                .is('is_booked', false)
+                .gte('slot_date', today);
+
+            if (error) throw error;
+            alert('Successfully cleared future unbooked slots.');
+            loadGeneratedSlots(selectedDoctor);
+        } catch (error) {
+            console.error('Error clearing slots:', error);
+            alert('Failed to clear slots.');
         } finally {
             setLoading(false);
         }
@@ -216,6 +278,7 @@ export function AppointmentSchedule() {
                         slots.push({
                             doctor_id: selectedDoctor,
                             branch_id: profile?.branch_id,
+                            slot_date: dateStr,
                             start_time: slotTime.toISOString(),
                             end_time: slotEndTime.toISOString(),
                             is_booked: false
@@ -239,6 +302,7 @@ export function AppointmentSchedule() {
                 if (slotsError) throw slotsError;
 
                 alert(`Successfully saved schedule and generated ${slots.length} slots!`);
+                loadGeneratedSlots(selectedDoctor);
             } else {
                 alert('Schedule saved, but no slots were generated for the selected date range.');
             }
@@ -364,6 +428,67 @@ export function AppointmentSchedule() {
                                     step="5"
                                 />
                             </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-lg font-semibold text-gray-900 flex items-center">
+                                <Calendar className="w-5 h-5 mr-2 text-gray-500" />
+                                Current Appointment Slots
+                            </h2>
+                            <button
+                                onClick={clearUpcomingSlots}
+                                disabled={loading || !selectedDoctor}
+                                className="text-sm text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
+                            >
+                                Clear Upcoming Slots
+                            </button>
+                        </div>
+
+                        <div className="max-h-96 overflow-y-auto border border-gray-100 rounded-lg">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-gray-50 text-gray-600 font-medium whitespace-nowrap">
+                                    <tr>
+                                        <th className="px-4 py-3">Date</th>
+                                        <th className="px-4 py-3">Day</th>
+                                        <th className="px-4 py-3">Available Slots</th>
+                                        <th className="px-4 py-3">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {Object.entries(slotSummary).map(([date, count]) => {
+                                        const dateObj = new Date(date);
+                                        const dayName = dayNames[dateObj.getDay()];
+
+                                        return (
+                                            <tr key={date} className="hover:bg-gray-50 transition-colors">
+                                                <td className="px-4 py-3 font-medium text-gray-900">{date}</td>
+                                                <td className="px-4 py-3 text-gray-600 font-roboto">{dayName}</td>
+                                                <td className="px-4 py-3">
+                                                    <span className="bg-green-100 text-green-700 px-2.5 py-1 rounded-full text-xs font-bold font-roboto">
+                                                        {count} Slots
+                                                    </span>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <span className="flex items-center text-green-600 font-medium text-xs">
+                                                        <Check className="w-3 h-3 mr-1" />
+                                                        Active
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {Object.keys(slotSummary).length === 0 && (
+                                        <tr>
+                                            <td colSpan={4} className="px-4 py-12 text-center text-gray-400 italic">
+                                                <Calendar className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                                                No slots generated yet. Pick your days and click "Generate Schedule".
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 

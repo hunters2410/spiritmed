@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Search, Building2, UserCheck, X, UserPlus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { logActivity } from '../utils/auditLogger';
 
 interface User {
   id: string;
@@ -86,6 +87,18 @@ export function Users() {
 
         if (profileError) throw profileError;
 
+        if (profile?.id) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: createFormData.branch_id || profile.branch_id || '',
+                action: 'CREATE',
+                tableName: 'users',
+                recordId: authData.user.id,
+                details: `Created new staff member: ${createFormData.full_name} (${createFormData.role})`,
+                newValues: { email: createFormData.email, role: createFormData.role, branch_id: createFormData.branch_id }
+            });
+        }
+
         alert('User created successfully!');
         setShowCreateModal(false);
         setCreateFormData({
@@ -118,6 +131,18 @@ export function Users() {
         .eq('id', selectedUser.id);
 
       if (error) throw error;
+
+      if (profile?.id) {
+          await logActivity(supabase, {
+              userId: profile.id,
+              branchId: selectedBranchId || profile.branch_id || '',
+              action: 'UPDATE',
+              tableName: 'users',
+              recordId: selectedUser.id,
+              details: `Assigned user ${selectedUser.full_name} to branch ${getBranchName(selectedBranchId)}`,
+              newValues: { branch_id: selectedBranchId }
+          });
+      }
 
       alert('Branch assigned successfully!');
       setShowAssignModal(false);

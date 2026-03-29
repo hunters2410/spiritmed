@@ -49,8 +49,16 @@ import AdmissionForms from './pages/AdmissionForms';
 import { Anaesthetists } from './pages/Anaesthetists';
 import { Assistants } from './pages/Assistants';
 import { Hospitals } from './pages/Hospitals';
+import { SurgicalProcedures } from './pages/SurgicalProcedures';
 import LabResults from './pages/LabResults';
 import { Histology } from './pages/Histology';
+import { Suppliers } from './pages/Suppliers';
+import { InventoryCategories } from './pages/InventoryCategories';
+import { InventoryUnits } from './pages/InventoryUnits';
+import { HospitalFiles } from './pages/HospitalFiles';
+import { AuditLogs } from './pages/AuditLogs';
+import { FollowUps } from './pages/FollowUps';
+import { Statistics } from './pages/Statistics';
 import { Layout } from './components/Layout';
 import { isSupabaseConfigured } from './lib/supabase';
 import { ShieldAlert } from 'lucide-react';
@@ -168,6 +176,8 @@ function AppContent() {
         return <AdmissionForms />;
       case 'anaesthetists':
         return <Anaesthetists />;
+      case 'surgical-procedures':
+        return <SurgicalProcedures />;
       case 'assistants':
         return <Assistants />;
       case 'hospitals':
@@ -186,6 +196,14 @@ function AppContent() {
         return <Payments />;
       case 'inventory':
         return <Inventory />;
+      case 'hospital-files':
+        return <HospitalFiles />;
+      case 'inventory/categories':
+        return <InventoryCategories />;
+      case 'inventory/units':
+        return <InventoryUnits />;
+      case 'suppliers':
+        return <Suppliers />;
       case 'pharmacy':
         return <Pharmacy />;
       case 'medicines':
@@ -206,6 +224,12 @@ function AppContent() {
         return <LabResults />;
       case 'histology':
         return <Histology />;
+      case 'audit-logs':
+        return <AuditLogs />;
+      case 'follow-ups':
+        return <FollowUps />;
+      case 'statistics':
+        return <Statistics />;
       default:
         return <Dashboard />;
     }

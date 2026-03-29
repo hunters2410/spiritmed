@@ -262,7 +262,7 @@ export default function ReferralForms() {
                                 </div>
                                 <div>
                                     <label className={labelCls}>To (Recipient Specialist/Clinic)</label>
-                                    <input type="text" placeholder="e.g. Dr. John Doe, Harare Oncology" value={form.recipient} onChange={e => setForm({ ...form, recipient: e.target.value })} className={inputCls} />
+                                    <input type="text" placeholder="e.g. Dr. Collen Hunters, Harare Oncology" value={form.recipient} onChange={e => setForm({ ...form, recipient: e.target.value })} className={inputCls} />
                                 </div>
                                 <SearchDropdown
                                     label="Patient (REF)"
@@ -314,7 +314,7 @@ export default function ReferralForms() {
                         <form onSubmit={handleCreatePatient} className="p-6 space-y-4">
                             <div>
                                 <label className={labelCls}>Full Name</label>
-                                <input required type="text" placeholder="John Doe" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
+                                <input required type="text" placeholder="Collen Hunters" value={newPatientForm.full_name} onChange={e => setNewPatientForm({ ...newPatientForm, full_name: e.target.value })} className={inputCls} />
                             </div>
                             <div>
                                 <label className={labelCls}>Gender</label>

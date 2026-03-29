@@ -230,7 +230,7 @@ export function Prescriptions() {
     const [form, setForm] = useState({
         prescription_date: new Date().toISOString().split('T')[0],
         patient_id: '',
-        doctor_id: profile?.id || '',
+        doctor_id: (profile?.role === 'doctor') ? profile?.id : '',
         notes: '',
         status: 'active',
     });
@@ -247,7 +247,7 @@ export function Prescriptions() {
         setForm({
             prescription_date: new Date().toISOString().split('T')[0],
             patient_id: '',
-            doctor_id: profile?.id || '',
+            doctor_id: (profile?.role === 'doctor') ? profile?.id : '',
             notes: '',
             status: 'active',
         });
@@ -270,11 +270,11 @@ export function Prescriptions() {
         setLoading(true);
         const [rxRes, patRes, docRes, medRes, freqRes] = await Promise.all([
             supabase.from('prescriptions')
-                .select('*, patient:patients(full_name,patient_number), doctor:users(full_name), prescription_items(id, period, time_unit, advice, medicine:medicines(name,dosage))')
+                .select('*, patient:patients(full_name,patient_number), doctor:users(full_name, specialization, qualifications, signature_url), prescription_items(id, period, time_unit, advice, medicine:medicines(name,dosage))')
                 .eq('branch_id', profile.branch_id)
                 .order('created_at', { ascending: false }),
             supabase.from('patients').select('id, full_name, patient_number').eq('branch_id', profile.branch_id).eq('status', 'active').order('full_name'),
-            supabase.from('users').select('id, full_name').eq('branch_id', profile.branch_id).in('role', ['doctor', 'admin']).order('full_name'),
+            supabase.from('users').select('id, full_name').eq('branch_id', profile.branch_id).eq('role', 'doctor').eq('is_active', true).order('full_name'),
             supabase.from('medicines').select('id, name, dosage').eq('branch_id', profile.branch_id).order('name'),
             supabase.from('medicine_frequencies').select('id, name').or(`branch_id.eq.${profile.branch_id},branch_id.is.null`).order('name'),
         ]);

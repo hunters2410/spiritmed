@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2, HeartPulse, Stethoscope, Skull, LogOut, ChevronLeft, ChevronRight } from 'lucide-react';
+import { logActivity } from '../utils/auditLogger';
 
 interface Patient {
   id: string;
@@ -212,20 +213,47 @@ export function Patients() {
           .eq('id', editingPatient.id);
 
         if (error) throw error;
+
+        if (profile?.id && profile?.branch_id) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: 'UPDATE',
+                tableName: 'patients',
+                recordId: editingPatient.id,
+                details: `Updated patient details for ${formData.full_name}`,
+                newValues: formData
+            });
+        }
       } else {
-        const { error } = await supabase
+        const patientNumber = generatePatientNumber();
+        const { error, data } = await supabase
           .from('patients')
           .insert([{
             ...formData,
             branch_id: profile?.branch_id,
-            patient_number: generatePatientNumber(),
+            patient_number: patientNumber,
             status: 'active',
             doctor_id: formData.doctor_id || null,
             medical_aid_id: formData.medical_aid_id || null,
             referral_doctor_id: formData.referral_doctor_id || null
-          }]);
+          }])
+          .select()
+          .single();
 
         if (error) throw error;
+
+        if (profile?.id && profile?.branch_id && data) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: 'CREATE',
+                tableName: 'patients',
+                recordId: data.id,
+                details: `Registered new patient: ${formData.full_name} (${patientNumber})`,
+                newValues: formData
+            });
+        }
       }
 
       setShowModal(false);
@@ -331,6 +359,18 @@ export function Patients() {
         .eq('id', patientId);
 
       if (error) throw error;
+
+      if (profile?.id && profile?.branch_id) {
+          await logActivity(supabase, {
+              userId: profile.id,
+              branchId: profile.branch_id,
+              action: 'DELETE',
+              tableName: 'patients',
+              recordId: patientId,
+              details: `Archived patient profile: ${name}`,
+              newValues: { status: 'inactive' }
+          });
+      }
       loadPatients();
     } catch (error) {
       console.error('Error archiving patient:', error);
@@ -363,6 +403,18 @@ export function Patients() {
         .eq('id', selectedPatientForStatus.id);
 
       if (error) throw error;
+
+      if (profile?.id && profile?.branch_id) {
+          await logActivity(supabase, {
+              userId: profile.id,
+              branchId: profile.branch_id,
+              action: 'STATUS_CHANGE',
+              tableName: 'patients',
+              recordId: selectedPatientForStatus.id,
+              details: `Changed patient status to ${status.toUpperCase()} (Reason: ${statusFormData.reason})`,
+              newValues: updateData
+          });
+      }
 
       alert(`Patient marked as ${status} successfully`);
       setShowDeceasedModal(false);

@@ -10,6 +10,7 @@ import {
     Eye, Pencil, Trash2, Printer, Download, ChevronLeft, ChevronRight, Filter
 } from 'lucide-react';
 import { ConsultationPrintView } from '../components/ConsultationPrintView';
+import { logActivity } from '../utils/auditLogger';
 
 /* ─── interfaces ─────────────────────────────────────────── */
 interface VitalSigns {
@@ -48,6 +49,7 @@ interface Consultation {
     follow_up_time?: string; follow_up_date?: string;
     patient: Patient;
     doctor: Doctor;
+    referral_doctor?: { full_name: string };
 }
 
 interface Prescription {
@@ -194,16 +196,14 @@ export function Consultations() {
     const [consultations, setConsultations] = useState<Consultation[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [searchQuery, setSearchQuery] = useState('');
 
     /* dropdown data */
     const [patients, setPatients] = useState<{ id: string; label: string }[]>([]);
-    const [doctors, setDoctors] = useState<{ id: string; label: string }[]>([]);
+    const [referralDoctors, setReferralDoctors] = useState<{ id: string; label: string }[]>([]);
     const [complaints, setComplaints] = useState<{ id: string; label: string }[]>([]);
     const [investigations, setInvestigations] = useState<{ id: string; label: string }[]>([]);
     const [diagnoses, setDiagnoses] = useState<{ id: string; label: string }[]>([]);
     const [medicines, setMedicines] = useState<{ id: string; name: string; dosage: string }[]>([]);
-    const [frequencies, setFrequencies] = useState<{ id: string; name: string }[]>([]);
 
     /* selected multi values */
     const [selectedComplaints, setSelectedComplaints] = useState<string[]>([]);
@@ -252,11 +252,10 @@ export function Consultations() {
 
     /* ─── data loaders ─── */
     useEffect(() => {
-        loadConsultations(); loadPatients(); loadDoctors();
+        loadConsultations(); loadPatients(); loadReferralDoctors();
         loadComplaintsFromDB(); loadInvestigationsFromDB();
         loadDiagnosesFromDB();
         loadMedicinesFromDB();
-        loadFrequenciesFromDB();
     }, [profile?.branch_id]);
 
     useEffect(() => {
@@ -273,7 +272,9 @@ export function Consultations() {
     async function loadConsultations() {
         try {
             let query = supabase.from('consultations').select(`
-                *, patient:patients(full_name, patient_number), doctor:users!doctor_id(full_name),
+                *, patient:patients(full_name, patient_number), 
+                doctor:users!doctor_id(full_name, specialization, qualifications, signature_url),
+                referral_doctor:referral_doctors!referred_by(full_name),
                 prescriptions(prescription_items(medicine:medicines(name, dosage), period, time_unit, advice))
             `).order('created_at', { ascending: false });
             if (profile?.role === 'doctor') query = query.eq('doctor_id', profile.id);
@@ -305,9 +306,10 @@ export function Consultations() {
         setPatients((data || []).map(p => ({ id: p.id, label: `${p.full_name} (${p.patient_number})` })));
     }
 
-    async function loadDoctors() {
-        const { data } = await supabase.from('users').select('id, full_name').eq('role', 'doctor').eq('is_active', true).order('full_name');
-        setDoctors((data || []).map(d => ({ id: d.id, label: `Dr. ${d.full_name}` })));
+    async function loadReferralDoctors() {
+        if (!profile?.branch_id) return;
+        const { data } = await supabase.from('referral_doctors').select('id, full_name').eq('branch_id', profile.branch_id).eq('is_active', true).order('full_name');
+        setReferralDoctors((data || []).map(d => ({ id: d.id, label: d.full_name })));
     }
 
     async function loadComplaintsFromDB() {
@@ -337,11 +339,6 @@ export function Consultations() {
         setMedicines((data || []).map(m => ({ id: m.id, name: m.name, dosage: m.dosage || '' })));
     }
 
-    async function loadFrequenciesFromDB() {
-        if (!profile?.branch_id) return;
-        const { data } = await supabase.from('medicine_frequencies').select('id, name').or(`branch_id.eq.${profile.branch_id},branch_id.is.null`).order('name');
-        setFrequencies((data || []).map(f => ({ id: f.id, name: f.name })));
-    }
 
     async function loadLatestVitals(patientId: string) {
         const { data, error } = await supabase.from('vital_signs').select('*').eq('patient_id', patientId).order('recorded_at', { ascending: false }).limit(1).single();
@@ -389,6 +386,18 @@ export function Consultations() {
             if (error) throw error;
             const consId = data[0].id;
 
+            if (profile?.id && profile?.branch_id) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id,
+                    action: 'CREATE',
+                    tableName: 'consultations',
+                    recordId: consId,
+                    details: `Recorded new consultation for patient ID: ${formData.patient_id}`,
+                    newValues: payload
+                });
+            }
+
             // 1. Save Prescriptions if any
             if (prescriptions.length > 0) {
                 // Create prescription header
@@ -421,7 +430,7 @@ export function Consultations() {
                     patient_id: formData.patient_id,
                     doctor_id: profile?.id,
                     appointment_date: formData.follow_up_date,
-                    appointment_type: 'Follow Up',
+                    appointment_type: 'follow_up',
                     status: 'pending_confirmation',
                     notes: `Follow up from consultation on ${new Date().toLocaleDateString()}`,
                     created_by: profile?.id
@@ -444,6 +453,19 @@ export function Consultations() {
                 branch_id: profile?.branch_id, status: 'active'
             }]).select().single();
             if (error) throw error;
+            
+            if (profile?.id && profile?.branch_id && data) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id,
+                    action: 'CREATE',
+                    tableName: 'patients',
+                    recordId: data.id,
+                    details: `Quick-added patient from consultations: ${newPatient.full_name}`,
+                    newValues: { ...newPatient, patient_number: patNum }
+                });
+            }
+
             const entry = { id: data.id, label: `${data.full_name} (${data.patient_number})` };
             setPatients(prev => [entry, ...prev]);
             setFormData(prev => ({ ...prev, patient_id: data.id }));
@@ -501,18 +523,21 @@ export function Consultations() {
     async function handleAddDoctor() {
         if (!newDoctor.full_name) return;
         try {
-            const { data, error } = await supabase.from('users').insert([{
-                ...newDoctor, role: 'doctor', is_active: true,
-                branch_id: profile?.branch_id, email: newDoctor.email || `doc${Date.now()}@placeholder.com`,
-                id: crypto.randomUUID()
+            const { data, error } = await supabase.from('referral_doctors').insert([{
+                full_name: newDoctor.full_name,
+                branch_id: profile?.branch_id,
+                contact: newDoctor.phone,
+                email: newDoctor.email,
+                affiliation: newDoctor.specialization,
+                is_active: true
             }]).select().single();
             if (error) throw error;
-            const entry = { id: data.id, label: `Dr. ${data.full_name}` };
-            setDoctors(prev => [...prev, entry]);
+            const entry = { id: data.id, label: data.full_name };
+            setReferralDoctors(prev => [...prev, entry]);
             setFormData(prev => ({ ...prev, referred_by: data.id }));
             setNewDoctor({ full_name: '', specialization: '', phone: '', email: '' });
             setShowAddDoctor(false);
-        } catch (e) { console.error(e); alert('Failed to add doctor. Use the Staff module instead.'); setShowAddDoctor(false); }
+        } catch (e) { console.error(e); alert('Failed to add referral doctor.'); setShowAddDoctor(false); }
     }
 
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
@@ -576,14 +601,35 @@ export function Consultations() {
 
     async function handleDelete() {
         if (!deleteId) return;
-        await supabase.from('consultations').delete().eq('id', deleteId);
+        const { error } = await supabase.from('consultations').delete().eq('id', deleteId);
+        if (!error && profile?.id && profile?.branch_id) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: 'DELETE',
+                tableName: 'consultations',
+                recordId: deleteId,
+                details: `Deleted consultation record (ID: ${deleteId})`
+            });
+        }
         setDeleteId(null);
         loadConsultations();
     }
 
     async function handleEditSave() {
         if (!editConsultation) return;
-        await supabase.from('consultations').update(editForm).eq('id', editConsultation.id);
+        const { error } = await supabase.from('consultations').update(editForm).eq('id', editConsultation.id);
+        if (!error && profile?.id && profile?.branch_id) {
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: 'UPDATE',
+                tableName: 'consultations',
+                recordId: editConsultation.id,
+                details: `Updated consultation record for patient ${editConsultation.patient?.full_name}`,
+                newValues: editForm
+            });
+        }
         setEditConsultation(null);
         loadConsultations();
     }
@@ -643,7 +689,7 @@ export function Consultations() {
     }
 
     const selectedPatientLabel = patients.find(p => p.id === formData.patient_id)?.label;
-    const selectedDoctorLabel = doctors.find(d => d.id === formData.referred_by)?.label;
+    const selectedDoctorLabel = referralDoctors.find(d => d.id === formData.referred_by)?.label;
 
     /* ═══════════ RENDER ═══════════ */
     if (viewMode === 'detailed' && viewConsultation && branch) {
@@ -1015,7 +1061,7 @@ export function Consultations() {
                             <SearchDropdown
                                 label="Referred By"
                                 placeholder="Search Doctor"
-                                items={doctors}
+                                items={referralDoctors}
                                 selected={[]}
                                 singleValue={selectedDoctorLabel}
                                 onSelect={(id) => setFormData(prev => ({ ...prev, referred_by: id }))}
