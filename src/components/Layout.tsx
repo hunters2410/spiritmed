@@ -1,12 +1,11 @@
 import { ReactNode, useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { GlobalSearch } from './GlobalSearch';
 import {
   Building2, Users, Calendar, FileText, DollarSign, Package,
   Settings, LogOut, Menu, X, Bell, MessageSquare,
   Stethoscope, TrendingUp,
   Briefcase, UserCheck, FileSpreadsheet, BarChart3, User,
-  Moon, Sun, ChevronLeft, ChevronRight, Activity, Microscope,
+  Moon, Sun, Activity, Microscope,
   FileCheck, FilePlus, UserCog, Shield, Mail, Send, History,
   Folder, FolderOpen, CalendarCheck, Pill, HeartPulse, ScrollText,
   FileSignature, ClipboardCheck, Skull, UserMinus, CreditCard,
@@ -128,9 +127,11 @@ export function Layout({ children }: LayoutProps) {
       title: 'Financial Management',
       items: [
         { label: 'Invoices', icon: Receipt, path: '/invoices', roles: ['admin', 'accountant', 'receptionist'] },
+        { label: 'Payment Procedures', icon: DollarSign, path: '/payment-procedures', roles: ['admin', 'accountant', 'receptionist'] },
         { label: 'Bills', icon: CreditCard, path: '/bills', roles: ['admin', 'accountant', 'receptionist'] },
         { label: 'Payments', icon: Wallet, path: '/payments', roles: ['admin', 'accountant', 'receptionist'] },
         { label: 'Expenses', icon: DollarSign, path: '/expenses', roles: ['admin', 'accountant'] },
+        { label: 'Expense Categories', icon: Layers, path: '/expense-categories', roles: ['admin', 'accountant'] },
         { label: 'Accounting', icon: Calculator, path: '/accounting', roles: ['super_admin', 'admin', 'accountant'] },
       ]
     },
@@ -240,13 +241,6 @@ export function Layout({ children }: LayoutProps) {
                   </button>
                 )}
               </div>
-              <button
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                className={`hidden lg:flex items-center justify-center p-1.5 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition mt-2`}
-                title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              >
-                {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-              </button>
             </div>
           </div>
 
@@ -288,19 +282,38 @@ export function Layout({ children }: LayoutProps) {
               <Menu className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             </button>
 
-            <div className="flex-1 max-w-2xl">
-              <GlobalSearch />
+            <div className="flex-1 flex items-center gap-4">
+              <button
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="hidden lg:flex items-center justify-center p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition border border-gray-200 dark:border-gray-700 shadow-sm"
+                title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+
+              <a href="/patients" className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-sm shadow-blue-600/20">
+                <UserPlus className="w-4 h-4" />
+                <span className="hidden md:inline">New Patient</span>
+              </a>
+              <a href="/bills" className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-sm shadow-blue-600/20">
+                <CreditCard className="w-4 h-4" />
+                <span className="hidden md:inline">Patient Bills</span>
+              </a>
+              <a href="/payments" className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition shadow-sm shadow-indigo-600/20">
+                <Wallet className="w-4 h-4" />
+                <span className="hidden md:inline">Record Payment</span>
+              </a>
             </div>
 
             <div className="flex items-center space-x-3">
               <div className="relative" ref={quickActionRef}>
                 <button
                   onClick={() => setQuickActionOpen(!quickActionOpen)}
-                  className="flex items-center space-x-2 px-3 md:px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white text-sm font-medium rounded-lg hover:from-green-700 hover:to-emerald-700 transition shadow-sm"
+                  className="flex items-center space-x-2 px-3 md:px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700 transition shadow-sm shadow-blue-600/20"
                   title="Quick Actions"
                 >
                   <Zap className="w-4 h-4" />
-                  <span className="hidden sm:inline">Quick Action</span>
+                  <span className="hidden sm:inline">Quick Actions</span>
                 </button>
 
                 {quickActionOpen && (

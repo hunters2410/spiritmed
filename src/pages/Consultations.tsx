@@ -387,13 +387,14 @@ export function Consultations() {
             const consId = data[0].id;
 
             if (profile?.id && profile?.branch_id) {
+                const patientName = patients.find(p => p.id === formData.patient_id)?.label || formData.patient_id;
                 await logActivity(supabase, {
                     userId: profile.id,
                     branchId: profile.branch_id,
                     action: 'CREATE',
                     tableName: 'consultations',
                     recordId: consId,
-                    details: `Recorded new consultation for patient ID: ${formData.patient_id}`,
+                    details: `Recorded new consultation for patient: ${patientName}`,
                     newValues: payload
                 });
             }

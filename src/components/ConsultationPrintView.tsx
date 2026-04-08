@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import {
-    Printer, FileText, Mail, Edit3, Plus,
+    Printer, Edit3, Plus,
     ArrowLeft, Download, Send
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
@@ -89,16 +89,15 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                                 <div className="w-16 h-16 bg-gray-200 flex items-center justify-center rounded text-gray-400">Logo</div>
                             )}
                             <div className="uppercase tracking-tighter">
-                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name || 'UROCARE'}</h1>
-                                <p className="text-xs font-semibold text-gray-600 mt-1">UROLOGY & MEN'S HEALTH CLINIC</p>
+                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name}</h1>
                             </div>
                         </div>
                         <div className="text-right text-[10px] text-gray-500 flex flex-col items-end">
-                            <p>{branch.phone || '+26324250305 | +263778229622'}</p>
-                            <p>{branch.email || 'urocare01@gmail.com'}</p>
-                            <p>{branch.website || 'www.urocare.co.zw'}</p>
+                            <p>{branch.phone}</p>
+                            <p>{branch.email}</p>
+                            <p>{branch.website}</p>
                             <p className="max-w-[200px] text-right mt-1">
-                                {branch.address || '27 Harvey Brown In Milton Park, Harare'}
+                                {branch.address}
                             </p>
                         </div>
                     </div>
@@ -122,27 +121,27 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                     <div className="space-y-8 text-xs">
                         <section>
                             <h3 className="font-bold text-gray-700 uppercase mb-2">Diagnosis & ICD 10 Code:</h3>
-                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.diagnosis || 'Overactive Bladder / Early BPH - N32.81'}</p>
+                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.diagnosis}</p>
                         </section>
 
                         <section>
                             <h3 className="font-bold text-gray-700 uppercase mb-2">Main Complaints:</h3>
-                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.chief_complaint || 'Urine frequency and urgency'}</p>
+                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.chief_complaint}</p>
                         </section>
 
                         <section>
                             <h3 className="font-bold text-gray-700 uppercase mb-2">Observation:</h3>
-                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.observations || 'DM\nHPT\nnocturia with frequency and urine urgency'}</p>
+                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.observations}</p>
                         </section>
 
                         <section>
                             <h3 className="font-bold text-gray-700 uppercase mb-2">Investigation:</h3>
-                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.investigations || 'PSA'}</p>
+                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.investigations}</p>
                         </section>
 
                         <section>
                             <h3 className="font-bold text-gray-700 uppercase mb-2">Treatment Plan:</h3>
-                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.treatment_plan || 'Solifenacin and Tamsulosin'}</p>
+                            <p className="text-gray-600 whitespace-pre-wrap">{consultation.treatment_plan}</p>
                         </section>
                     </div>
 
@@ -157,9 +156,9 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                                 <div className="h-16 w-32 border-b border-gray-300 mb-2 mb-4" />
                             )}
                             <div className="text-[10px] text-gray-600">
-                                <p className="font-bold uppercase">{consultation.doctor.full_name || 'DR S. C. MEKI'}</p>
-                                <p className="italic">{consultation.doctor.qualifications || 'MMED UROLOGY-UZ'}</p>
-                                <p>{consultation.doctor.specialization || 'Specialist Urologist - SU700212'}</p>
+                                <p className="font-bold uppercase">{consultation.doctor.full_name}</p>
+                                <p className="italic">{consultation.doctor.qualifications}</p>
+                                <p>{consultation.doctor.specialization}</p>
                                 <p className="mt-2 border-t border-gray-200 pt-1">Doctor's Signature</p>
                             </div>
                         </div>

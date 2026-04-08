@@ -90,7 +90,6 @@ export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, on
                             )}
                             <div className="uppercase tracking-tighter">
                                 <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name || 'Clinic Name'}</h1>
-                                <p className="text-xs font-semibold text-gray-600 mt-1 uppercase">Professional Healthcare Services</p>
                             </div>
                         </div>
                         <div className="text-right text-[10px] text-gray-500 flex flex-col items-end">
@@ -134,7 +133,7 @@ export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, on
                             </tr>
                         </thead>
                         <tbody>
-                            {prescription.items.map((item, idx) => (
+                            {prescription.items.map((item) => (
                                 <React.Fragment key={item.id}>
                                     <tr className="border-b border-gray-100">
                                         <td className="py-3 font-semibold text-gray-800">{item.medicine_name}</td>

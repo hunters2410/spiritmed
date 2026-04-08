@@ -293,8 +293,7 @@ export function ClinicalDocumentPrintView({
                                 <div className="w-16 h-16 bg-gray-200 flex items-center justify-center rounded text-gray-400">Logo</div>
                             )}
                             <div className="uppercase tracking-tighter">
-                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name || 'UROCARE'}</h1>
-                                <p className="text-xs font-semibold text-gray-600 mt-1 uppercase">Clinic Letterhead</p>
+                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name}</h1>
                             </div>
                         </div>
                         <div className="text-right text-[10px] text-gray-500 flex flex-col items-end">

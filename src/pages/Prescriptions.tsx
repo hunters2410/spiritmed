@@ -6,6 +6,7 @@ import {
     ChevronRight, Activity, Eye, Printer, UserPlus, ClipboardList
 } from 'lucide-react';
 import { PrescriptionPrintView } from '../components/PrescriptionPrintView';
+import { logActivity } from '../utils/auditLogger';
 
 /* ─── types ─── */
 interface Patient { id: string; full_name: string; patient_number: string; }
@@ -351,6 +352,19 @@ export function Prescriptions() {
         }));
         const { error: itemErr } = await supabase.from('prescription_items').insert(payload);
         if (itemErr) { setError(itemErr.message); setSubmitting(false); return; }
+
+        if (profile?.id && profile?.branch_id) {
+            const patientName = patients.find(p => p.id === form.patient_id)?.full_name || form.patient_id;
+            await logActivity(supabase, {
+                userId: profile.id,
+                branchId: profile.branch_id,
+                action: editingRx ? 'UPDATE' : 'CREATE',
+                tableName: 'prescriptions',
+                recordId: rxId,
+                details: `${editingRx ? 'Updated' : 'Issued new'} prescription for patient: ${patientName}`,
+                newValues: { ...form, items: payload }
+            });
+        }
 
         setShowModal(false);
         loadAll();

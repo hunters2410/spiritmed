@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2, HeartPulse, Stethoscope, Skull, LogOut, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2, HeartPulse, Stethoscope, Skull, LogOut, ChevronLeft, ChevronRight, FileSpreadsheet, FileJson } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
+import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 
 interface Patient {
   id: string;
@@ -14,6 +15,7 @@ interface Patient {
   email: string;
   blood_group: string;
   status: string;
+  total_due?: number;
   created_at: string;
 }
 
@@ -41,13 +43,14 @@ export function Patients() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState(25);
   const [showModal, setShowModal] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [currentTab, setCurrentTab] = useState('personal');
   const [filters, setFilters] = useState({
     gender: 'all',
-    bloodGroup: 'all'
+    bloodGroup: 'all',
+    hasBalance: 'all'
   });
   const [showDeceasedModal, setShowDeceasedModal] = useState(false);
   const [showDischargedModal, setShowDischargedModal] = useState(false);
@@ -109,7 +112,7 @@ export function Patients() {
     try {
       let query = supabase
         .from('patients')
-        .select('*')
+        .select('*, invoices(balance)')
         .eq('status', 'active')
         .order('created_at', { ascending: false });
 
@@ -120,7 +123,13 @@ export function Patients() {
       const { data, error } = await query;
 
       if (error) throw error;
-      setPatients(data || []);
+      
+      const patientsWithDue = (data || []).map((p: any) => ({
+        ...p,
+        total_due: p.invoices?.reduce((sum: number, inv: any) => sum + (inv.balance || 0), 0) || 0
+      }));
+
+      setPatients(patientsWithDue);
     } catch (error) {
       console.error('Error loading patients:', error);
     } finally {
@@ -461,6 +470,34 @@ export function Patients() {
     window.URL.revokeObjectURL(url);
   };
 
+  const handleExportExcel = () => {
+    const data = filteredPatients.map(p => ({
+      'Patient Number': p.patient_number,
+      'Full Name': p.full_name,
+      'Age': p.date_of_birth ? getAge(p.date_of_birth) : 'N/A',
+      'Gender': p.gender,
+      'Phone': p.phone || '',
+      'Email': p.email || '',
+      'Total Due': p.total_due || 0,
+      'Blood Group': p.blood_group || '',
+      'Registration Date': new Date(p.created_at).toLocaleDateString()
+    }));
+    exportToExcel(data, 'spiritmed_patients');
+  };
+
+  const handleExportPDF = () => {
+    const headers = ['#', 'Name', 'Phone', 'Due', 'Gender', 'Blood'];
+    const data = filteredPatients.map((p, i) => [
+      i + 1,
+      p.full_name,
+      p.phone || 'N/A',
+      `$${(p.total_due || 0).toLocaleString()}`,
+      p.gender,
+      p.blood_group || 'N/A'
+    ]);
+    exportToPDF(headers, data, 'Spiritmed Patient Directory', 'spiritmed_patients');
+  };
+
   const filteredPatients = patients.filter(patient => {
     const matchesSearch =
       patient.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -469,9 +506,14 @@ export function Patients() {
 
     const matchesGender = filters.gender === 'all' || patient.gender === filters.gender;
     const matchesBloodGroup = filters.bloodGroup === 'all' || patient.blood_group === filters.bloodGroup;
+    const matchesBalance = filters.hasBalance === 'all' || 
+                          (filters.hasBalance === 'due' && (patient.total_due || 0) > 0) ||
+                          (filters.hasBalance === 'none' && (patient.total_due || 0) <= 0);
 
-    return matchesSearch && matchesGender && matchesBloodGroup;
+    return matchesSearch && matchesGender && matchesBloodGroup && matchesBalance;
   });
+
+  const totalClinicReceivable = filteredPatients.reduce((sum, p) => sum + (p.total_due || 0), 0);
 
   const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
   const paginated = filteredPatients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -511,6 +553,17 @@ export function Patients() {
         </button>
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <div className="text-xs text-gray-500 uppercase font-bold mb-1">Total Patients</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">{filteredPatients.length}</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
+          <div className="text-xs text-amber-500 uppercase font-bold mb-1">Total Dues</div>
+          <div className="text-2xl font-bold text-amber-600">${totalClinicReceivable.toLocaleString()}</div>
+        </div>
+      </div>
+
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
@@ -531,13 +584,29 @@ export function Patients() {
               <Filter className="w-4 h-4" />
               <span>Filters</span>
             </button>
-            <button
-              onClick={exportToCSV}
-              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            >
-              <Download className="w-4 h-4" />
-              <span>Export</span>
-            </button>
+            <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-lg p-1">
+              <button
+                onClick={handleExportExcel}
+                className="p-2 text-green-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+                title="Export to Excel"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleExportPDF}
+                className="p-2 text-red-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+                title="Export to PDF"
+              >
+                <FileJson className="w-4 h-4" />
+              </button>
+              <button
+                onClick={exportToCSV}
+                className="p-2 text-blue-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+                title="Export to CSV"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -575,9 +644,21 @@ export function Patients() {
                   <option value="O-">O-</option>
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Financial State</label>
+                <select
+                  value={filters.hasBalance}
+                  onChange={(e) => { setFilters({ ...filters, hasBalance: e.target.value }); setCurrentPage(1); }}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                >
+                  <option value="all">All Patients</option>
+                  <option value="due">With Outstanding Dues</option>
+                  <option value="none">No Dues</option>
+                </select>
+              </div>
               <div className="flex items-end">
                 <button
-                  onClick={() => { setFilters({ gender: 'all', bloodGroup: 'all' }); setCurrentPage(1); }}
+                  onClick={() => { setFilters({ gender: 'all', bloodGroup: 'all', hasBalance: 'all' }); setCurrentPage(1); }}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition"
                 >
                   Clear Filters
@@ -604,6 +685,9 @@ export function Patients() {
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Contact
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-bold text-amber-600 uppercase tracking-wider font-sans">
+                  Total Due
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Blood Group
@@ -662,6 +746,11 @@ export function Patients() {
                           {patient.email}
                         </div>
                       )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className={`text-sm font-black ${ (patient.total_due || 0) > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                        ${(patient.total_due || 0).toLocaleString()}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400">
@@ -732,11 +821,37 @@ export function Patients() {
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-            <p className="text-xs text-gray-500">
-              Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredPatients.length)} of {filteredPatients.length}
-            </p>
+        {filteredPatients.length > 0 && (
+          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center space-x-4">
+                <p className="text-xs text-gray-500">
+                  Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredPatients.length)} of {filteredPatients.length}
+                </p>
+                <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                    <select
+                        value={itemsPerPage === filteredPatients.length ? 'all' : itemsPerPage}
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === 'all') {
+                                setItemsPerPage(filteredPatients.length || 1000000);
+                            } else {
+                                setItemsPerPage(Number(val));
+                            }
+                            setCurrentPage(1);
+                        }}
+                        className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none focus:ring-1 focus:ring-green-500"
+                    >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value="all">ALL</option>
+                    </select>
+                </div>
+            </div>
+            
+            {itemsPerPage < filteredPatients.length && totalPages > 1 && (
             <div className="flex gap-2">
               <button
                 disabled={currentPage === 1}
@@ -764,6 +879,7 @@ export function Patients() {
                 <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
               </button>
             </div>
+            )}
           </div>
         )}
       </div>

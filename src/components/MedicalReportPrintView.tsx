@@ -89,16 +89,15 @@ export function MedicalReportPrintView({ report, branch, onBack, onEdit, onAddNe
                                 <div className="w-16 h-16 bg-gray-200 flex items-center justify-center rounded text-gray-400">Logo</div>
                             )}
                             <div className="uppercase tracking-tighter">
-                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name || 'UROCARE'}</h1>
-                                <p className="text-xs font-semibold text-gray-600 mt-1">UROLOGY & MEN'S HEALTH CLINIC</p>
+                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name}</h1>
                             </div>
                         </div>
                         <div className="text-right text-[10px] text-gray-500 flex flex-col items-end">
-                            <p>{branch.phone || '+26324250305 | +263778229622'}</p>
-                            <p>{branch.email || 'urocare01@gmail.com'}</p>
-                            <p>{branch.website || 'www.urocare.co.zw'}</p>
+                            <p>{branch.phone}</p>
+                            <p>{branch.email}</p>
+                            <p>{branch.website}</p>
                             <p className="max-w-[200px] text-right mt-1">
-                                {branch.address || '27 Harvey Brown In Milton Park, Harare'}
+                                {branch.address}
                             </p>
                         </div>
                     </div>

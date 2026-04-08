@@ -2,9 +2,10 @@ import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
-    Plus, Search, Download, Filter, File, FileText, Upload,
-    X, Eye, Trash2, Folder, Grid, List as ListIcon, MoreVertical,
-    Edit2, Check, AlertCircle, FileImage, FileBarChart
+    Plus, Search, Download, File, FileText, Upload,
+    X, Eye, Trash2, Folder, Grid, List as ListIcon,
+    Edit2, Check, AlertCircle, FileImage, FileBarChart,
+    ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 interface HospitalFile {
@@ -32,10 +33,14 @@ export function HospitalFiles() {
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
-    const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+    const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
     const [showUploadModal, setShowUploadModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [filters, setFilters] = useState({ category: 'all', type: 'all' });
+
+    /* ─── pagination state ─── */
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 8;
 
     /* ─── upload state ─── */
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -189,6 +194,14 @@ export function HospitalFiles() {
         return matchesSearch && matchesCat;
     });
 
+    const totalPages = Math.ceil(filtered.length / itemsPerPage);
+    const paginatedItems = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+    // Reset page if filters or search changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, filters]);
+
     const formatSize = (b: number) => {
         if (b < 1024) return b + ' B';
         if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
@@ -244,73 +257,113 @@ export function HospitalFiles() {
                     <p className="text-gray-500 font-bold">No files found</p>
                     <button onClick={() => setShowUploadModal(true)} className="mt-4 text-indigo-600 font-bold hover:underline">Upload your first document</button>
                 </div>
-            ) : viewMode === 'grid' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                    {filtered.map(f => (
-                        <div key={f.id} className="group bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:shadow-xl transition-all relative overflow-hidden">
-                            <div className="flex justify-between items-start mb-4">
-                                <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg group-hover:scale-110 transition-transform">
-                                    {getFileIcon(f.file_type)}
+            ) : (
+                <>
+                    {viewMode === 'grid' ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                            {paginatedItems.map(f => (
+                                <div key={f.id} className="group bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 hover:shadow-xl transition-all relative overflow-hidden">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg group-hover:scale-110 transition-transform">
+                                            {getFileIcon(f.file_type)}
+                                        </div>
+                                        <div className="flex gap-1">
+                                            <button onClick={() => { setEditingFile(f); setEditFormData({ name: f.name, description: f.description || '', category: f.category }); setShowEditModal(true); }}
+                                                className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition opacity-0 group-hover:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>
+                                            <button onClick={() => handleDelete(f)}
+                                                className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-md transition opacity-0 group-hover:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>
+                                        </div>
+                                    </div>
+                                    <h3 className="font-bold text-gray-900 dark:text-white truncate text-sm mb-1" title={f.name}>{f.name}</h3>
+                                    <p className="text-[10px] text-gray-500 flex items-center gap-2 mb-2">
+                                        <span className="bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded uppercase font-bold">{f.category}</span>
+                                        <span>{formatSize(f.file_size)}</span>
+                                    </p>
+                                    <div className="flex gap-2 mt-4 pt-4 border-t border-gray-50 dark:border-gray-700/50">
+                                        <button onClick={() => window.open(f.file_url, '_blank')} className="flex-1 flex items-center justify-center gap-1 text-[11px] font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900/40 py-2 rounded-lg transition"><Eye className="w-3.5 h-3.5" /> View</button>
+                                        <button onClick={() => handleDownload(f)} className="flex-1 flex items-center justify-center gap-1 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 py-2 rounded-lg transition"><Download className="w-3.5 h-3.5" /> DL</button>
+                                    </div>
                                 </div>
-                                <div className="flex gap-1">
-                                    <button onClick={() => { setEditingFile(f); setEditFormData({ name: f.name, description: f.description || '', category: f.category }); setShowEditModal(true); }}
-                                        className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition opacity-0 group-hover:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>
-                                    <button onClick={() => handleDelete(f)}
-                                        className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-md transition opacity-0 group-hover:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>
-                                </div>
-                            </div>
-                            <h3 className="font-bold text-gray-900 dark:text-white truncate text-sm mb-1" title={f.name}>{f.name}</h3>
-                            <p className="text-[10px] text-gray-500 flex items-center gap-2 mb-2">
-                                <span className="bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded uppercase font-bold">{f.category}</span>
-                                <span>{formatSize(f.file_size)}</span>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                            <table className="w-full text-sm">
+                                <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase font-bold tracking-wider">
+                                    <tr>
+                                        <th className="px-6 py-4 text-left">Document</th>
+                                        <th className="px-6 py-4 text-left">Category</th>
+                                        <th className="px-6 py-4 text-left">Size</th>
+                                        <th className="px-6 py-4 text-left">Uploaded</th>
+                                        <th className="px-6 py-4 text-center">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
+                                    {paginatedItems.map(f => (
+                                        <tr key={f.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition-colors">
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-3">
+                                                    {getFileIcon(f.file_type)}
+                                                    <div className="min-w-0">
+                                                        <p className="font-bold text-gray-900 dark:text-white truncate">{f.name}</p>
+                                                        <p className="text-[10px] text-gray-500 truncate italic">{f.description || 'No description'}</p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4"><span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-[10px] uppercase font-bold">{f.category}</span></td>
+                                            <td className="px-6 py-4 text-gray-500 text-xs">{formatSize(f.file_size)}</td>
+                                            <td className="px-6 py-4 text-gray-500 text-xs">{new Date(f.created_at).toLocaleDateString()}</td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex justify-center gap-2">
+                                                    <button onClick={() => window.open(f.file_url, '_blank')} className="p-1.5 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"><Eye className="w-4 h-4" /></button>
+                                                    <button onClick={() => handleDownload(f)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg"><Download className="w-4 h-4" /></button>
+                                                    <button onClick={() => { setEditingFile(f); setEditFormData({ name: f.name, description: f.description || '', category: f.category }); setShowEditModal(true); }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg"><Edit2 className="w-4 h-4" /></button>
+                                                    <button onClick={() => handleDelete(f)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {/* Pagination Controls */}
+                    {totalPages > 1 && (
+                        <div className="flex items-center justify-between pt-4 pb-2">
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filtered.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{filtered.length}</span> documents
                             </p>
-                            <div className="flex gap-2 mt-4 pt-4 border-t border-gray-50 dark:border-gray-700/50">
-                                <button onClick={() => window.open(f.file_url, '_blank')} className="flex-1 flex items-center justify-center gap-1 text-[11px] font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900/40 py-2 rounded-lg transition"><Eye className="w-3.5 h-3.5" /> View</button>
-                                <button onClick={() => handleDownload(f)} className="flex-1 flex items-center justify-center gap-1 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 py-2 rounded-lg transition"><Download className="w-3.5 h-3.5" /> DL</button>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                    disabled={currentPage === 1}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex gap-1">
+                                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                                        <button
+                                            key={page}
+                                            onClick={() => setCurrentPage(page)}
+                                            className={`w-8 h-8 rounded-lg font-bold transition text-xs ${currentPage === page ? 'bg-indigo-600 text-white shadow-lg' : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}
+                                        >
+                                            {page}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                                    disabled={currentPage === totalPages}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
                             </div>
                         </div>
-                    ))}
-                </div>
-            ) : (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    <table className="w-full text-sm">
-                        <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase font-bold tracking-wider">
-                            <tr>
-                                <th className="px-6 py-4 text-left">Document</th>
-                                <th className="px-6 py-4 text-left">Category</th>
-                                <th className="px-6 py-4 text-left">Size</th>
-                                <th className="px-6 py-4 text-left">Uploaded</th>
-                                <th className="px-6 py-4 text-center">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                            {filtered.map(f => (
-                                <tr key={f.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition-colors">
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center gap-3">
-                                            {getFileIcon(f.file_type)}
-                                            <div className="min-w-0">
-                                                <p className="font-bold text-gray-900 dark:text-white truncate">{f.name}</p>
-                                                <p className="text-[10px] text-gray-500 truncate italic">{f.description || 'No description'}</p>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4"><span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-[10px] uppercase font-bold">{f.category}</span></td>
-                                    <td className="px-6 py-4 text-gray-500 text-xs">{formatSize(f.file_size)}</td>
-                                    <td className="px-6 py-4 text-gray-500 text-xs">{new Date(f.created_at).toLocaleDateString()}</td>
-                                    <td className="px-6 py-4">
-                                        <div className="flex justify-center gap-2">
-                                            <button onClick={() => window.open(f.file_url, '_blank')} className="p-1.5 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"><Eye className="w-4 h-4" /></button>
-                                            <button onClick={() => handleDownload(f)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg"><Download className="w-4 h-4" /></button>
-                                            <button onClick={() => { setEditingFile(f); setEditFormData({ name: f.name, description: f.description || '', category: f.category }); setShowEditModal(true); }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg"><Edit2 className="w-4 h-4" /></button>
-                                            <button onClick={() => handleDelete(f)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg"><Trash2 className="w-4 h-4" /></button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                    )}
+                </>
             )}
 
             {/* ─── UPLOAD MODAL ─── */}

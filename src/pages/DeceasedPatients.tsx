@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Search, Eye, Phone, Mail, Calendar, Download, Filter, Skull, X } from 'lucide-react';
+import { Search, Eye, Phone, Mail, Calendar, Download, Filter, Skull, X, FileSpreadsheet, FileJson, ChevronLeft, ChevronRight } from 'lucide-react';
+import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 
 interface Patient {
   id: string;
@@ -15,6 +16,7 @@ interface Patient {
   deceased_date: string;
   deceased_reason: string;
   address: string;
+  total_due?: number;
   created_at: string;
 }
 
@@ -30,6 +32,8 @@ export function DeceasedPatients() {
     gender: 'all',
     bloodGroup: 'all'
   });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
 
   useEffect(() => {
     loadPatients();
@@ -41,7 +45,7 @@ export function DeceasedPatients() {
     try {
       let query = supabase
         .from('patients')
-        .select('*')
+        .select('*, invoices(balance)')
         .eq('status', 'deceased')
         .order('deceased_date', { ascending: false });
 
@@ -52,7 +56,13 @@ export function DeceasedPatients() {
       const { data, error } = await query;
 
       if (error) throw error;
-      setPatients(data || []);
+      
+      const patientsWithDue = (data || []).map((p: any) => ({
+        ...p,
+        total_due: p.invoices?.reduce((sum: number, inv: any) => sum + (inv.balance || 0), 0) || 0
+      }));
+
+      setPatients(patientsWithDue);
     } catch (error) {
       console.error('Error loading deceased patients:', error);
     } finally {
@@ -88,6 +98,32 @@ export function DeceasedPatients() {
     window.URL.revokeObjectURL(url);
   };
 
+  const handleExportExcel = () => {
+    const data = filteredPatients.map(p => ({
+      'Patient Number': p.patient_number,
+      'Full Name': p.full_name,
+      'Age at Death': p.date_of_birth ? getAge(p.date_of_birth) : 'N/A',
+      'Gender': p.gender,
+      'Phone': p.phone || '',
+      'Due': p.total_due || 0,
+      'Deceased Date': p.deceased_date ? new Date(p.deceased_date).toLocaleDateString() : 'N/A'
+    }));
+    exportToExcel(data, 'spiritmed_deceased_patients');
+  };
+
+  const handleExportPDF = () => {
+    const headers = ['#', 'Name', 'Phone', 'Due', 'Gender', 'Deceased Date'];
+    const data = filteredPatients.map((p, i) => [
+      i + 1,
+      p.full_name,
+      p.phone || 'N/A',
+      `$${(p.total_due || 0).toLocaleString()}`,
+      p.gender,
+      p.deceased_date ? new Date(p.deceased_date).toLocaleDateString() : 'N/A'
+    ]);
+    exportToPDF(headers, data, 'Spiritmed Deceased Patients', 'spiritmed_deceased_patients');
+  };
+
   const filteredPatients = patients.filter(patient => {
     const matchesSearch =
       patient.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -99,6 +135,9 @@ export function DeceasedPatients() {
 
     return matchesSearch && matchesGender && matchesBloodGroup;
   });
+
+  const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
+  const paginated = filteredPatients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const getAge = (dob: string) => {
     if (!dob) return 'N/A';
@@ -132,13 +171,6 @@ export function DeceasedPatients() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Deceased Patients</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">View and manage records of deceased patients</p>
         </div>
-        <button
-          onClick={exportToCSV}
-          className="flex items-center space-x-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition shadow-md"
-        >
-          <Download className="w-5 h-5" />
-          <span>Export to CSV</span>
-        </button>
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
@@ -160,6 +192,29 @@ export function DeceasedPatients() {
             <Filter className="w-4 h-4" />
             <span>Filters</span>
           </button>
+          <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-lg p-1">
+            <button
+              onClick={handleExportExcel}
+              className="p-2 text-green-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+              title="Export to Excel"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleExportPDF}
+              className="p-2 text-red-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+              title="Export to PDF"
+            >
+              <FileJson className="w-4 h-4" />
+            </button>
+            <button
+              onClick={exportToCSV}
+              className="p-2 text-blue-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+              title="Export to CSV"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {showFilters && (
@@ -209,10 +264,8 @@ export function DeceasedPatients() {
         )}
       </div>
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Total Deceased: {filteredPatients.length}</h2>
-        </div>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Total Deceased: {filteredPatients.length}</h2>
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -220,6 +273,7 @@ export function DeceasedPatients() {
           <table className="w-full border-collapse">
             <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
+                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">#</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
                   Patient Info
                 </th>
@@ -231,6 +285,9 @@ export function DeceasedPatients() {
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
                   Blood Group
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-bold text-amber-600 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700 font-sans">
+                  Total Due
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">
                   Deceased Date
@@ -246,13 +303,16 @@ export function DeceasedPatients() {
             <tbody className="bg-white dark:bg-gray-800">
               {filteredPatients.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={10} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                     No deceased patients found
                   </td>
                 </tr>
               ) : (
-                filteredPatients.map((patient) => (
+                paginated.map((patient, idx) => (
                   <tr key={patient.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-400">
+                      {(currentPage - 1) * itemsPerPage + idx + 1}
+                    </td>
                     <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
                       <div className="flex items-center">
                         <div className="w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center">
@@ -287,6 +347,11 @@ export function DeceasedPatients() {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap border-b border-r border-gray-200 dark:border-gray-700">
+                      <div className={`text-sm font-black ${ (patient.total_due || 0) > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                        ${(patient.total_due || 0).toLocaleString()}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap border-b border-r border-gray-200 dark:border-gray-700">
                       <div className="text-sm text-gray-900 dark:text-white flex items-center">
                         <Calendar className="w-3 h-3 mr-1 text-gray-400" />
                         {patient.deceased_date ? new Date(patient.deceased_date).toLocaleDateString() : 'N/A'}
@@ -312,6 +377,69 @@ export function DeceasedPatients() {
             </tbody>
           </table>
         </div>
+        
+        {/* Pagination */}
+        {filteredPatients.length > 0 && (
+          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center space-x-4">
+              <p className="text-xs text-gray-500">
+                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredPatients.length)} of {filteredPatients.length}
+              </p>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                <select
+                  value={itemsPerPage === filteredPatients.length ? 'all' : itemsPerPage}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'all') {
+                      setItemsPerPage(filteredPatients.length || 1);
+                    } else {
+                      setItemsPerPage(Number(val));
+                    }
+                    setCurrentPage(1);
+                  }}
+                  className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none focus:ring-1 focus:ring-red-500"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value="all">ALL</option>
+                </select>
+              </div>
+            </div>
+
+            {itemsPerPage < filteredPatients.length && totalPages > 1 && (
+              <div className="flex gap-2">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => p - 1)}
+                  className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition"
+                >
+                  <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                </button>
+                <div className="flex gap-1">
+                  {[...Array(totalPages)].map((_, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setCurrentPage(i + 1)}
+                      className={`w-8 h-8 rounded-lg text-xs font-bold transition ${currentPage === i + 1 ? 'bg-red-600 text-white' : 'border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700'}`}
+                    >
+                      {i + 1}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => p + 1)}
+                  className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition"
+                >
+                  <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showViewModal && selectedPatient && (

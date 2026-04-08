@@ -22,6 +22,9 @@ export interface UserProfile {
   phone: string | null;
   address: string | null;
   avatar_url: string | null;
+  signature_url: string | null;
+  specialization: string | null;
+  qualifications: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -36,6 +39,8 @@ export interface Branch {
   city: string | null;
   country: string | null;
   logo_url: string | null;
+  signature_url: string | null;
+  website: string | null;
   website_config: Record<string, any>;
   is_active: boolean;
   created_at: string;

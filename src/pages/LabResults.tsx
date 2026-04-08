@@ -3,8 +3,10 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { SearchDropdown } from '../components/SearchDropdown';
 import { Plus, Search, Microscope, Pencil, Trash2, X, Activity, FlaskConical, Filter, Eye } from 'lucide-react';
+import { logActivity } from '../utils/auditLogger';
+import { emailService } from '../utils/emailService';
 
-interface Patient { id: string; full_name: string; patient_number: string; }
+interface Patient { id: string; full_name: string; patient_number: string; email?: string; }
 interface HistologyType { id: string; name: string; value: string; }
 
 interface LabResult {
@@ -89,7 +91,7 @@ export default function LabResults() {
         try {
             const [resData, patData, histData] = await Promise.all([
                 supabase.from('lab_results').select('*, patient:patients(full_name, patient_number)').eq('branch_id', profile?.branch_id).order('created_at', { ascending: false }),
-                supabase.from('patients').select('id, full_name, patient_number').eq('branch_id', profile?.branch_id),
+                supabase.from('patients').select('id, full_name, patient_number, email').eq('branch_id', profile?.branch_id),
                 supabase.from('histology_types').select('id, name, value').eq('branch_id', profile?.branch_id).order('name')
             ]);
             setResults(resData.data || []);
@@ -116,9 +118,51 @@ export default function LabResults() {
             if (selectedResult) {
                 const { error } = await supabase.from('lab_results').update(payload).eq('id', selectedResult.id);
                 if (error) throw error;
+
+                if (profile?.id && profile?.branch_id) {
+                    const patientName = patients.find(p => p.id === form.patient_id)?.full_name || form.patient_id;
+                    await logActivity(supabase, {
+                        userId: profile.id,
+                        branchId: profile.branch_id,
+                        action: 'UPDATE',
+                        tableName: 'lab_results',
+                        recordId: selectedResult.id,
+                        details: `Updated lab results for patient: ${patientName}`,
+                        newValues: payload
+                    });
+                }
             } else {
-                const { error } = await supabase.from('lab_results').insert([payload]);
+                const { data, error } = await supabase.from('lab_results').insert([payload]).select().single();
                 if (error) throw error;
+
+                if (profile?.id && profile?.branch_id && data) {
+                    const patient = patients.find(p => p.id === form.patient_id);
+                    const patientName = patient?.full_name || form.patient_id;
+                    
+                    await logActivity(supabase, {
+                        userId: profile.id,
+                        branchId: profile.branch_id,
+                        action: 'CREATE',
+                        tableName: 'lab_results',
+                        recordId: data.id,
+                        details: `Recorded new lab results for patient: ${patientName}`,
+                        newValues: payload
+                    });
+
+                    // Trigger Email Notification
+                    if (patient?.email) {
+                        await emailService.sendEmail({
+                            recipientEmail: patient.email,
+                            recipientName: patient.full_name,
+                            subject: 'Lab Results Ready',
+                            body: `Hello ${patient.full_name},\n\nYour recent lab results have been recorded in the system.\n\nThank you.`,
+                            branchId: profile.branch_id,
+                            senderId: profile.id,
+                            referenceId: data.id,
+                            referenceType: 'lab_results'
+                        });
+                    }
+                }
             }
             setShowModal(false);
             loadAll();

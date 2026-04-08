@@ -56,9 +56,15 @@ import { Suppliers } from './pages/Suppliers';
 import { InventoryCategories } from './pages/InventoryCategories';
 import { InventoryUnits } from './pages/InventoryUnits';
 import { HospitalFiles } from './pages/HospitalFiles';
+import { Emails } from './pages/Emails';
 import { AuditLogs } from './pages/AuditLogs';
 import { FollowUps } from './pages/FollowUps';
 import { Statistics } from './pages/Statistics';
+import { PaymentProcedures } from './pages/PaymentProcedures';
+import { PatientBills } from './pages/PatientBills';
+import { Expenses } from './pages/Expenses';
+import { ExpenseCategories } from './pages/ExpenseCategories';
+import { Accounting } from './pages/Accounting';
 import { Layout } from './components/Layout';
 import { isSupabaseConfigured } from './lib/supabase';
 import { ShieldAlert } from 'lucide-react';
@@ -192,8 +198,18 @@ function AppContent() {
         return <Vitals />;
       case 'invoices':
         return <Invoices />;
+      case 'payment-procedures':
+        return <PaymentProcedures />;
+      case 'bills':
+        return <PatientBills />;
       case 'payments':
         return <Payments />;
+      case 'expenses':
+        return <Expenses />;
+      case 'expense-categories':
+        return <ExpenseCategories />;
+      case 'accounting':
+        return <Accounting />;
       case 'inventory':
         return <Inventory />;
       case 'hospital-files':
@@ -224,6 +240,8 @@ function AppContent() {
         return <LabResults />;
       case 'histology':
         return <Histology />;
+      case 'emails':
+        return <Emails />;
       case 'audit-logs':
         return <AuditLogs />;
       case 'follow-ups':

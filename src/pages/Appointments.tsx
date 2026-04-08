@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Calendar as CalendarIcon, Clock, User, Edit, Check, Filter, Search, UserPlus, Users, Stethoscope } from 'lucide-react';
+import { Plus, Calendar as CalendarIcon, Clock, User, Edit, Check, Filter, Search } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
+import { emailService } from '../utils/emailService';
 import { SearchDropdown } from '../components/SearchDropdown';
 
 interface Appointment {
@@ -157,7 +158,7 @@ export function Appointments() {
     if (!profile?.branch_id) return;
     const { data } = await supabase
       .from('patients')
-      .select('id, full_name, patient_number')
+      .select('id, full_name, patient_number, email')
       .eq('branch_id', profile.branch_id)
       .eq('status', 'active')
       .order('full_name');
@@ -288,13 +289,14 @@ export function Appointments() {
         if (updateError) throw updateError;
 
         if (profile?.id && profile?.branch_id) {
+            const patientName = patients.find(p => p.id === formData.patient_id)?.full_name || formData.patient_id;
             await logActivity(supabase, {
                 userId: profile.id,
                 branchId: profile.branch_id,
                 action: 'UPDATE',
                 tableName: 'appointments',
                 recordId: editingId,
-                details: `Updated appointment details for patient ID: ${formData.patient_id}`,
+                details: `Updated appointment details for patient: ${patientName}`,
                 newValues: formData
             });
         }
@@ -342,15 +344,44 @@ export function Appointments() {
         if (slotError) console.error('Error updating slot:', slotError);
 
         if (profile?.id && profile?.branch_id && appointmentData) {
+            const patient = patients.find(p => p.id === formData.patient_id);
+            const patientName = patient?.full_name || formData.patient_id;
+            
             await logActivity(supabase, {
                 userId: profile.id,
                 branchId: profile.branch_id,
                 action: 'CREATE',
                 tableName: 'appointments',
                 recordId: appointmentData.id,
-                details: `Scheduled new ${formData.appointment_type} appointment for patient ID ${formData.patient_id}`,
+                details: `Scheduled new ${formData.appointment_type} appointment for patient: ${patientName}`,
                 newValues: formData
             });
+
+            // Trigger Email Notification
+            if (patient?.email) {
+                const { data: template } = await supabase
+                    .from('email_templates')
+                    .select('id')
+                    .eq('name', 'Appointment Confirmation')
+                    .maybeSingle();
+
+                await emailService.sendEmail({
+                    recipientEmail: patient.email,
+                    recipientName: patient.full_name,
+                    subject: 'Appointment scheduled',
+                    body: `Your appointment is confirmed for ${new Date(selectedSlot.start_time).toLocaleString()}`,
+                    templateId: template?.id,
+                    placeholders: {
+                        patient_name: patient.full_name,
+                        date: new Date(selectedSlot.start_time).toLocaleDateString(),
+                        time: new Date(selectedSlot.start_time).toLocaleTimeString()
+                    },
+                    branchId: profile.branch_id,
+                    senderId: profile.id,
+                    referenceId: appointmentData.id,
+                    referenceType: 'appointment'
+                });
+            }
         }
 
         setSuccessMessage('Appointment scheduled successfully!');
