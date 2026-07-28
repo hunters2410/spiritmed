@@ -81,27 +81,40 @@ export function Payroll() {
 
     useEffect(() => {
         loadData();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadData() {
-        if (!profile?.branch_id) return;
         setLoading(true);
+        const bid = profile?.branch_id;
+
+        let payrollQ = supabase.from('payroll').select('*, users:user_id(id, full_name, role, phone)');
+        let configQ = supabase.from('salary_configurations').select('*');
+        let staffQ = supabase.from('users').select('*').eq('is_active', true);
+        let settingsQ = supabase.from('payroll_settings').select('*');
+        let branchQ = bid ? supabase.from('branches').select('name').eq('id', bid).single() : null;
+
+        if (bid) {
+            payrollQ = payrollQ.eq('branch_id', bid);
+            configQ = configQ.eq('branch_id', bid);
+            staffQ = staffQ.eq('branch_id', bid);
+            settingsQ = settingsQ.eq('branch_id', bid);
+        }
 
         const [payrollRes, configRes, staffRes, settingsRes, branchRes] = await Promise.all([
-            supabase.from('payroll').select('*, users:user_id(id, full_name, role, phone)').eq('branch_id', profile.branch_id).order('period_year', { ascending: false }).order('period_month', { ascending: false }),
-            supabase.from('salary_configurations').select('*').eq('branch_id', profile.branch_id),
-            supabase.from('users').select('*').eq('branch_id', profile.branch_id).eq('is_active', true),
-            supabase.from('payroll_settings').select('*').eq('branch_id', profile.branch_id).single(),
-            supabase.from('branches').select('name').eq('id', profile.branch_id).single()
+            payrollQ.order('period_year', { ascending: false }).order('period_month', { ascending: false }),
+            configQ,
+            staffQ,
+            bid ? settingsQ.single() : settingsQ.limit(1).maybeSingle(),
+            branchQ ? branchQ : Promise.resolve({ data: { name: 'All Branches' }, error: null })
         ]);
 
         if (!payrollRes.error) setPayroll(payrollRes.data || []);
         if (!staffRes.error) setStaff(staffRes.data || []);
-        if (!settingsRes.error) setSettings(settingsRes.data);
-        if (!branchRes.error) setBranchName(branchRes.data.name);
+        if (!settingsRes.error && settingsRes.data) setSettings(settingsRes.data);
+        if (branchRes && !branchRes.error && branchRes.data) setBranchName((branchRes.data as any).name);
 
         // If settings don't exist, create default
-        if (settingsRes.error && settingsRes.error.code === 'PGRST116') {
+        if ((settingsRes.error && settingsRes.error.code === 'PGRST116') || (!settingsRes.error && !settingsRes.data)) {
            const defaultSettings: PayrollSettings = {
                 paye_enabled: true,
                 nssa_enabled: true,
@@ -119,8 +132,10 @@ export function Payroll() {
                 ]
            };
            setSettings(defaultSettings);
-           // Auto-save default if missing
-           await supabase.from('payroll_settings').insert([{ branch_id: profile.branch_id, ...defaultSettings }]);
+           // Auto-save default if missing (only if branch exists)
+           if (bid) {
+               await supabase.from('payroll_settings').insert([{ branch_id: bid, ...defaultSettings }]);
+           }
         }
 
         if (!configRes.error) {
@@ -332,7 +347,7 @@ export function Payroll() {
                     </div>
 
                     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
-                        <table className="w-full text-sm">
+                        <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                             <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-500 font-bold uppercase text-[10px] tracking-wider">
                                 <tr>
                                     <th className="px-6 py-3 text-left">Staff Member</th>
@@ -346,7 +361,7 @@ export function Payroll() {
                             </thead>
                             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                                 {filtered.map(p => (
-                                    <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors">
+                                    <tr key={p.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/10 transition-colors">
                                         <td className="px-6 py-4">
                                             <div className="flex items-center gap-3">
                                                 <div className="w-8 h-8 rounded-lg bg-green-50 dark:bg-green-900/30 flex items-center justify-center text-green-700 font-bold text-xs">{p.users.full_name.charAt(0)}</div>
@@ -380,7 +395,7 @@ export function Payroll() {
             ) : activeTab === 'staff' ? (
                 /* ─── STAFF SALARY LIST VIEW ─── */
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-500 font-bold uppercase text-[10px] tracking-wider">
                             <tr>
                                 <th className="px-6 py-5 text-left">Staff Name</th>
@@ -397,7 +412,7 @@ export function Payroll() {
                                 const allowances = (config.housing_allowance || 0) + (config.transport_allowance || 0) + (config.other_allowances || 0);
                                 const customDedsCount = config.custom_deductions?.length || 0;
                                 return (
-                                    <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors">
+                                    <tr key={user.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/10 transition-colors">
                                         <td className="px-6 py-4 font-semibold text-gray-900 dark:text-white">{user.full_name}</td>
                                         <td className="px-6 py-4 text-[10px] uppercase text-gray-400 font-bold tracking-tight">{user.role}</td>
                                         <td className="px-6 py-4 text-green-700 font-semibold text-sm">${config.basic_salary.toLocaleString()}</td>

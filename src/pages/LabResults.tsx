@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { SearchDropdown } from '../components/SearchDropdown';
-import { Plus, Search, Microscope, Pencil, Trash2, X, Activity, FlaskConical, Filter, Eye } from 'lucide-react';
+import { Plus, Search, Microscope, Pencil, Trash2, X, Activity, FlaskConical, Filter, Eye, ChevronLeft, ChevronRight } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
 import { emailService } from '../utils/emailService';
 
@@ -78,22 +78,32 @@ export default function LabResults() {
     const [showPatientModal, setShowPatientModal] = useState(false);
     const [selectedResult, setSelectedResult] = useState<LabResult | null>(null);
     const [search, setSearch] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
     const [form, setForm] = useState({ ...emptyForm });
     const [newHistologyForm, setNewHistologyForm] = useState({ name: '', value: '' });
     const [newPatientForm, setNewPatientForm] = useState({ full_name: '', email: '', gender: 'male', date_of_birth: '' });
 
     useEffect(() => {
-        if (profile?.branch_id) loadAll();
-    }, [profile?.branch_id]);
+        if (profile) loadAll();
+    }, [profile?.id]);
 
     async function loadAll() {
         setLoading(true);
         try {
-            const [resData, patData, histData] = await Promise.all([
-                supabase.from('lab_results').select('*, patient:patients(full_name, patient_number)').eq('branch_id', profile?.branch_id).order('created_at', { ascending: false }),
-                supabase.from('patients').select('id, full_name, patient_number, email').eq('branch_id', profile?.branch_id),
-                supabase.from('histology_types').select('id, name, value').eq('branch_id', profile?.branch_id).order('name')
-            ]);
+            const bid = profile?.branch_id;
+
+            const resQ = supabase.from('lab_results').select('*, patient:patients(full_name, patient_number)').order('created_at', { ascending: false });
+            const patQ = supabase.from('patients').select('id, full_name, patient_number, email');
+            const histQ = supabase.from('histology_types').select('id, name, value').order('name');
+
+            if (bid) {
+                resQ.eq('branch_id', bid);
+                patQ.eq('branch_id', bid);
+                histQ.eq('branch_id', bid);
+            }
+
+            const [resData, patData, histData] = await Promise.all([resQ, patQ, histQ]);
             setResults(resData.data || []);
             setPatients(patData.data || []);
             setHistologyTypes(histData.data || []);
@@ -191,7 +201,16 @@ export default function LabResults() {
         e.preventDefault();
         if (!profile?.branch_id) return;
         const patient_number = `P${Date.now().toString().slice(-6)}`;
-        const { data, error } = await supabase.from('patients').insert([{ ...newPatientForm, patient_number, branch_id: profile.branch_id, status: 'active' }]).select().single();
+        const generatedEmail = newPatientForm.email || `patient.${patient_number.toLowerCase()}@spiritmed.com`;
+        const generatedPassword = 'patient123456';
+        const { data, error } = await supabase.from('patients').insert([{
+            ...newPatientForm,
+            email: generatedEmail,
+            password: generatedPassword,
+            patient_number,
+            branch_id: profile.branch_id,
+            status: 'active'
+        }]).select().single();
         if (error) { alert(error.message); return; }
         setPatients(prev => [...prev, data].sort((a, b) => a.full_name.localeCompare(b.full_name)));
         setForm(prev => ({ ...prev, patient_id: data.id }));
@@ -230,7 +249,7 @@ export default function LabResults() {
                     </div>
                 </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                             <tr>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">#</th>
@@ -244,9 +263,10 @@ export default function LabResults() {
                                 <tr><td colSpan={4} className="px-6 py-10 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600 mx-auto" /></td></tr>
                             ) : filtered.length === 0 ? (
                                 <tr><td colSpan={4} className="px-6 py-10 text-center text-gray-500">No lab results found.</td></tr>
-                            ) : filtered.map((r, idx) => (
+                            ) : filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((r, idx) => (
                                 <tr key={r.id} className="hover:bg-teal-50/30 dark:hover:bg-teal-900/10 transition-colors">
-                                    <td className="px-6 py-4 text-gray-400 font-mono text-xs">{idx + 1}</td>
+                            {/* Correct 1-based index calculation: index in paginated array + offset */}
+                                    <td className="px-6 py-4 text-gray-400 font-mono text-xs">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
                                     <td className="px-6 py-4">
                                         <div className="font-bold text-gray-900 dark:text-white">{r.patient?.full_name}</div>
                                         <div className="text-xs text-gray-500">{r.patient?.patient_number}</div>
@@ -263,6 +283,61 @@ export default function LabResults() {
                         </tbody>
                     </table>
                 </div>
+                {/* Pagination Controls */}
+                {!loading && filtered.length > 0 && (
+                    <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/10">
+                        <div className="flex items-center gap-4">
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filtered.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{filtered.length}</span> results
+                            </p>
+                            <div className="flex items-center gap-1.5 border-l pl-4 border-gray-200 dark:border-gray-700">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Show</span>
+                                <select
+                                    value={itemsPerPage}
+                                    onChange={(e) => {
+                                        setItemsPerPage(Number(e.target.value));
+                                        setCurrentPage(1);
+                                    }}
+                                    className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                                >
+                                    <option value={10}>10</option>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </div>
+                        </div>
+                        {Math.ceil(filtered.length / itemsPerPage) > 1 && (
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                    disabled={currentPage === 1}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex gap-1">
+                                    {Array.from({ length: Math.ceil(filtered.length / itemsPerPage) }, (_, i) => i + 1).map(page => (
+                                        <button
+                                            key={page}
+                                            onClick={() => setCurrentPage(page)}
+                                            className={`w-8 h-8 rounded-lg font-bold transition text-xs ${currentPage === page ? 'bg-teal-600 text-white shadow-md' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent text-gray-600 dark:text-gray-400'}`}
+                                        >
+                                            {page}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(filtered.length / itemsPerPage)))}
+                                    disabled={currentPage === Math.ceil(filtered.length / itemsPerPage)}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Add/Edit Modal */}

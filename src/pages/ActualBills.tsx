@@ -74,6 +74,7 @@ export function ActualBills() {
     const [branch, setBranch] = useState<any>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterStatus, setFilterStatus] = useState('all');
+    const [filterDueType, setFilterDueType] = useState('all');
     const [filterDebtors, setFilterDebtors] = useState(false);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
@@ -127,6 +128,20 @@ export function ActualBills() {
             setFormData(prev => ({ ...prev, patient_id: patientId }));
             setShowModal(true);
         }
+        const statusParam = params.get('status');
+        if (statusParam) {
+            if (statusParam === 'pending' || statusParam === 'unpaid') {
+                setFilterStatus('unpaid');
+            } else if (statusParam === 'paid') {
+                setFilterStatus('paid');
+            } else {
+                setFilterStatus(statusParam);
+            }
+        }
+        const dueTypeParam = params.get('dueType');
+        if (dueTypeParam) {
+            setFilterDueType(dueTypeParam);
+        }
     }, [profile]);
 
     const loadBranch = async () => {
@@ -164,15 +179,19 @@ export function ActualBills() {
             (inv.bill_number || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
             (inv.patient?.patient_number || '').toLowerCase().includes(searchQuery.toLowerCase());
         
-        const matchesStatus = filterStatus === 'all' || inv.status === filterStatus;
+        const matchesStatus = filterStatus === 'all' || 
+            (filterStatus === 'unpaid' ? (inv.status === 'unpaid' || inv.status === 'partially_paid') : inv.status === filterStatus);
         const matchesDebtor = !filterDebtors || (inv.patient?.total_cumulative_balance || 0) > 0;
         const matchesMedicalAid = filterMedicalAid === 'all' || inv.medical_aid_id === filterMedicalAid;
+        const matchesDueType = filterDueType === 'all' ||
+            (filterDueType === 'medical_aid' ? (inv.medical_aid_balance || 0) > 0 :
+             filterDueType === 'shortfall' ? (inv.shortfall_balance || 0) > 0 : true);
         
         const invDate = new Date(inv.bill_date);
         const matchesStartDate = !startDate || invDate >= new Date(startDate);
         const matchesEndDate = !endDate || invDate <= new Date(endDate);
 
-        return matchesSearch && matchesStatus && matchesDebtor && matchesMedicalAid && matchesStartDate && matchesEndDate;
+        return matchesSearch && matchesStatus && matchesDebtor && matchesMedicalAid && matchesDueType && matchesStartDate && matchesEndDate;
     });
 
     const totalBillsAmount = filteredBills.reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
@@ -874,22 +893,30 @@ export function ActualBills() {
                         />
                     </div>
 
-                    {/* Status & MA - 3 cols */}
-                    <div className="md:col-span-3 grid grid-cols-2 gap-2">
+                    {/* Status, Dues & MA - 4 cols */}
+                    <div className="md:col-span-4 grid grid-cols-3 gap-2">
                         <select
                             value={filterStatus}
                             onChange={(e) => { setFilterStatus(e.target.value); setCurrentPage(1); }}
-                            className="px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-gray-600"
+                            className="px-2 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-gray-600 dark:text-gray-300"
                         >
                             <option value="all">All Status</option>
-                            <option value="unpaid">Unpaid</option>
-                            <option value="partially_paid">Partial</option>
+                            <option value="unpaid">Unpaid / Partial</option>
                             <option value="paid">Paid</option>
+                        </select>
+                        <select
+                            value={filterDueType}
+                            onChange={(e) => { setFilterDueType(e.target.value); setCurrentPage(1); }}
+                            className="px-2 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-gray-600 dark:text-gray-300"
+                        >
+                            <option value="all">All Dues</option>
+                            <option value="medical_aid">Medical Aid Dues</option>
+                            <option value="shortfall">Shortfall Dues</option>
                         </select>
                         <select
                             value={filterMedicalAid}
                             onChange={(e) => { setFilterMedicalAid(e.target.value); setCurrentPage(1); }}
-                            className="px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-gray-600"
+                            className="px-2 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-gray-600 dark:text-gray-300"
                         >
                             <option value="all">Insurers</option>
                             {medicalAids.map(aid => (

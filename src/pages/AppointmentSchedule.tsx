@@ -3,6 +3,15 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Save, Calendar, Clock, User, Check, Trash2, PlusCircle } from 'lucide-react';
 
+/** Converts a Date to a local YYYY-MM-DD string, avoiding UTC offset issues.
+ *  e.g. in UTC+2, `new Date().toISOString()` at 23:30 returns yesterday's date. */
+const toLocalDateStr = (date: Date): string =>
+    [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, '0'),
+        String(date.getDate()).padStart(2, '0')
+    ].join('-');
+
 export function AppointmentSchedule() {
     const { profile } = useAuth();
     const [loading, setLoading] = useState(false);
@@ -14,19 +23,16 @@ export function AppointmentSchedule() {
     const [generatedSlots, setGeneratedSlots] = useState<any[]>([]);
     const [slotSummary, setSlotSummary] = useState<Record<string, number>>({});
 
-    const [scheduleConfig, setScheduleConfig] = useState({
-        daysOfWeek: {
-            0: false, // Sunday
-            1: true,  // Monday
-            2: true,  // Tuesday
-            3: true,  // Wednesday
-            4: true,  // Thursday
-            5: true,  // Friday
-            6: false  // Saturday
-        },
+    const [scheduleConfig, setScheduleConfig] = useState<{
+        daysOfWeek: Record<number, boolean>;
+        startTime: string;
+        endTime: string;
+        duration: number;
+    }>({
+        daysOfWeek: { 0: false, 1: true, 2: true, 3: true, 4: true, 5: true, 6: false },
         startTime: '09:00',
         endTime: '17:00',
-        duration: 30 // minutes
+        duration: 30
     });
 
     useEffect(() => {
@@ -83,7 +89,7 @@ export function AppointmentSchedule() {
 
     const loadGeneratedSlots = async (doctorId: string) => {
         try {
-            const today = new Date().toISOString().split('T')[0];
+            const today = toLocalDateStr(new Date()); // local date, not UTC
             const { data, error } = await supabase
                 .from('appointment_slots')
                 .select('slot_date, is_booked')
@@ -204,11 +210,7 @@ export function AppointmentSchedule() {
     const handleDayToggle = (index: number) => {
         setScheduleConfig(prev => ({
             ...prev,
-            daysOfWeek: {
-                ...prev.daysOfWeek,
-                // @ts-ignore
-                [index]: !prev.daysOfWeek[index]
-            }
+            daysOfWeek: { ...prev.daysOfWeek, [index]: !prev.daysOfWeek[index] }
         }));
     };
 
@@ -220,96 +222,97 @@ export function AppointmentSchedule() {
 
         setLoading(true);
         try {
-            // 1. Save Configuration to doctor_availability
-            const availabilityUpserts = [];
-            for (let i = 0; i < 7; i++) {
-                // @ts-ignore
-                if (scheduleConfig.daysOfWeek[i]) {
-                    availabilityUpserts.push({
-                        doctor_id: selectedDoctor,
-                        branch_id: profile?.branch_id,
-                        day_of_week: i,
-                        start_time: scheduleConfig.startTime,
-                        end_time: scheduleConfig.endTime,
-                        break_start_time: null,
-                        break_end_time: null,
-                        slot_duration: scheduleConfig.duration,
-                        is_active: true
-                    });
-                } else {
-                    // We might want to set is_active = false for unchecked days if we are strictly managing state
-                    // For now, we only upsert active ones or we'd need to delete old ones.
-                    // Simpler approach: Upsert "is_active: false" for unchecked days if they exist? 
-                    // Let's just focus on saving the active pattern.
-                }
-            }
+            // 1. Save ALL 7 days to doctor_availability with correct is_active flag (Bug 9)
+            //    Unchecked days are explicitly deactivated rather than left stale in the DB.
+            const availabilityUpserts = Array.from({ length: 7 }, (_, i) => ({
+                doctor_id: selectedDoctor,
+                branch_id: profile?.branch_id,
+                day_of_week: i,
+                start_time: scheduleConfig.startTime,
+                end_time: scheduleConfig.endTime,
+                break_start_time: null,
+                break_end_time: null,
+                slot_duration: scheduleConfig.duration,
+                is_active: scheduleConfig.daysOfWeek[i]
+            }));
 
-            if (availabilityUpserts.length > 0) {
-                const { error: configError } = await supabase
-                    .from('doctor_availability')
-                    .upsert(availabilityUpserts, { onConflict: 'doctor_id,day_of_week' });
-                if (configError) throw configError;
-            }
+            const { error: configError } = await supabase
+                .from('doctor_availability')
+                .upsert(availabilityUpserts, { onConflict: 'doctor_id,day_of_week' });
+            if (configError) throw configError;
 
+            // 2. Clear all future unbooked slots before regenerating (Bug 3)
+            //    Prevents stale slots from schedule changes accumulating in the DB.
+            const todayStr = toLocalDateStr(new Date());
+            const { error: clearError } = await supabase
+                .from('appointment_slots')
+                .delete()
+                .eq('doctor_id', selectedDoctor)
+                .is('is_booked', false)
+                .gte('slot_date', todayStr);
+            if (clearError) throw clearError;
 
-            // 2. Generate and Insert Slots
-            const slots = [];
-            let currentDate = new Date();
-            const endDate = new Date();
-            endDate.setDate(endDate.getDate() + 90); // Generate for 90 days
+            // 3. Generate fresh slots
+            const slots: any[] = [];
 
-            // Convert holidays to a set of strings for easy lookup
+            // Bug 2 fix: start from midnight local time, not current moment
+            const now = new Date();
+            let currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+            const endDate = new Date(currentDate);
+            endDate.setDate(endDate.getDate() + 90);
+
             const holidayDates = new Set(holidays.map(h => h.holiday_date));
 
             while (currentDate <= endDate) {
-                const dateStr = currentDate.toISOString().split('T')[0];
+                // Bug 1 fix: use local date, not UTC via toISOString()
+                const dateStr = toLocalDateStr(currentDate);
                 const dayOfWeek = currentDate.getDay();
 
-                // Check if this day is a selected work day AND NOT a holiday
-                // @ts-ignore
                 if (scheduleConfig.daysOfWeek[dayOfWeek] && !holidayDates.has(dateStr)) {
-                    let slotTime = new Date(`${dateStr}T${scheduleConfig.startTime}`);
-                    const dayEndTime = new Date(`${dateStr}T${scheduleConfig.endTime}`);
+                    let slotTime = new Date(`${dateStr}T${scheduleConfig.startTime}:00`);
+                    const dayEndTime = new Date(`${dateStr}T${scheduleConfig.endTime}:00`);
 
                     while (slotTime < dayEndTime) {
                         const slotEndTime = new Date(slotTime.getTime() + scheduleConfig.duration * 60000);
                         if (slotEndTime > dayEndTime) break;
 
-                        slots.push({
-                            doctor_id: selectedDoctor,
-                            branch_id: profile?.branch_id,
-                            slot_date: dateStr,
-                            start_time: slotTime.toISOString(),
-                            end_time: slotEndTime.toISOString(),
-                            is_booked: false
-                        });
+                        // Bug 11 fix: skip time slots that have already passed today
+                        if (slotTime > now) {
+                            slots.push({
+                                doctor_id: selectedDoctor,
+                                branch_id: profile?.branch_id,
+                                slot_date: dateStr,
+                                start_time: slotTime.toISOString(),
+                                end_time: slotEndTime.toISOString(),
+                                is_booked: false
+                            });
+                        }
 
-                        slotTime = slotEndTime;
+                        slotTime = new Date(slotEndTime.getTime()); // Bug 2: immutable increment
                     }
                 }
-                currentDate.setDate(currentDate.getDate() + 1);
+
+                // Bug 2 fix: immutable date increment (no in-place mutation)
+                currentDate = new Date(currentDate.getTime() + 86400000);
             }
 
-            console.log(`Generated ${slots.length} potential slots.`);
-
             if (slots.length > 0) {
-                // Batch insert - limit to 500 to be safe? Supabase handles larger batches usually.
-                // On conflict: do nothing (ignore duplicates)
+                // Simple insert — stale slots cleared above, no duplicates possible
                 const { error: slotsError } = await supabase
                     .from('appointment_slots')
-                    .upsert(slots, { onConflict: 'doctor_id,start_time', ignoreDuplicates: true });
+                    .insert(slots);
 
                 if (slotsError) throw slotsError;
-
                 alert(`Successfully saved schedule and generated ${slots.length} slots!`);
                 loadGeneratedSlots(selectedDoctor);
             } else {
-                alert('Schedule saved, but no slots were generated for the selected date range.');
+                alert('Schedule saved. No upcoming slots were generated — check your day selection and time range.');
             }
 
         } catch (error) {
             console.error('Error generating slots:', error);
-            alert('Failed to save schedule or generate slots. Please ensure the database tables are created.');
+            alert('Failed to save schedule or generate slots. Please ensure the database tables are set up correctly.');
         } finally {
             setLoading(false);
         }
@@ -371,20 +374,16 @@ export function AppointmentSchedule() {
                             {dayNames.map((day, index) => (
                                 <button
                                     key={day}
-                                    // @ts-ignore
                                     onClick={() => handleDayToggle(index)}
                                     className={`flex items-center justify-center p-3 rounded-lg border transition ${
-                                        // @ts-ignore
                                         scheduleConfig.daysOfWeek[index]
                                             ? 'bg-green-50 border-green-200 text-green-700'
                                             : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
                                         }`}
                                 >
                                     <div className={`w-4 h-4 rounded border flex items-center justify-center mr-2 ${
-                                        // @ts-ignore
                                         scheduleConfig.daysOfWeek[index] ? 'bg-green-500 border-green-500' : 'border-gray-400'
                                         }`}>
-                                        {/* @ts-ignore */}
                                         {scheduleConfig.daysOfWeek[index] && <Check className="w-3 h-3 text-white" />}
                                     </div>
                                     <span className="font-medium">{day}</span>
@@ -447,7 +446,7 @@ export function AppointmentSchedule() {
                         </div>
 
                         <div className="max-h-96 overflow-y-auto border border-gray-100 rounded-lg">
-                            <table className="w-full text-sm text-left">
+                            <table className="w-full text-sm text-left border-collapse border border-gray-200 dark:border-gray-700">
                                 <thead className="bg-gray-50 text-gray-600 font-medium whitespace-nowrap">
                                     <tr>
                                         <th className="px-4 py-3">Date</th>
@@ -462,7 +461,7 @@ export function AppointmentSchedule() {
                                         const dayName = dayNames[dateObj.getDay()];
 
                                         return (
-                                            <tr key={date} className="hover:bg-gray-50 transition-colors">
+                                            <tr key={date} className="hover:bg-gray-100 transition-colors">
                                                 <td className="px-4 py-3 font-medium text-gray-900">{date}</td>
                                                 <td className="px-4 py-3 text-gray-600 font-roboto">{dayName}</td>
                                                 <td className="px-4 py-3">
@@ -570,20 +569,14 @@ export function AppointmentSchedule() {
                             <div className="border-t border-gray-200 pt-4">
                                 <h3 className="text-sm font-medium text-gray-900 mb-2">Selected Days</h3>
                                 <div className="flex flex-wrap gap-2">
-                                    {dayNames.filter((_, i) =>
-                                        // @ts-ignore
-                                        scheduleConfig.daysOfWeek[i]
-                                    ).map(day => (
+                                    {dayNames.filter((_, i) => scheduleConfig.daysOfWeek[i]).map(day => (
                                         <span key={day} className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
                                             {day.slice(0, 3)}
                                         </span>
                                     ))}
-                                    {dayNames.filter((_, i) =>
-                                        // @ts-ignore
-                                        scheduleConfig.daysOfWeek[i]
-                                    ).length === 0 && (
-                                            <span className="text-xs text-gray-500 italic">No days selected</span>
-                                        )}
+                                    {dayNames.filter((_, i) => scheduleConfig.daysOfWeek[i]).length === 0 && (
+                                        <span className="text-xs text-gray-500 italic">No days selected</span>
+                                    )}
                                 </div>
                             </div>
 

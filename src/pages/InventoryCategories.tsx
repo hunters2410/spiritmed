@@ -30,7 +30,7 @@ export function InventoryCategories() {
 
     useEffect(() => {
         loadCategories();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadCategories() {
         if (!profile?.branch_id) return;
@@ -108,9 +108,9 @@ export function InventoryCategories() {
 
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Category Name</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Description</th>
                                 <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Actions</th>

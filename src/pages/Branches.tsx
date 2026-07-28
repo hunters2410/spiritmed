@@ -1,6 +1,8 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { supabase, Branch } from '../lib/supabase';
-import { Plus, Search, Edit2, Trash2, Users } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { createStaffUserAccount } from '../utils/userCreation';
+import { Plus, Search, Edit2, Trash2, Users, Power } from 'lucide-react';
 
 export function Branches() {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -115,46 +117,56 @@ export function Branches() {
     }
   };
 
+  const handleToggleStatus = async (branch: Branch) => {
+    if (!confirm(`Are you sure you want to ${branch.is_active ? 'deactivate' : 'activate'} ${branch.name}?`)) {
+      return;
+    }
+
+    setSubmitLoading(true);
+    try {
+      const { error } = await supabase
+        .from('branches')
+        .update({ is_active: !branch.is_active })
+        .eq('id', branch.id);
+
+      if (error) throw error;
+      alert(`Branch ${branch.is_active ? 'deactivated' : 'activated'} successfully!`);
+      loadBranches();
+    } catch (error: any) {
+      console.error('Error toggling branch status:', error);
+      alert(error.message || 'Failed to update branch status');
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
   const handleCreateAdmin = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedBranch) return;
 
     setSubmitLoading(true);
     try {
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      await createStaffUserAccount({
         email: adminFormData.email,
         password: adminFormData.password,
-        options: {
-          data: {
-            full_name: adminFormData.full_name,
-            role: 'admin',
-            branch_id: selectedBranch.id
-          }
-        }
+        full_name: adminFormData.full_name,
+        phone: adminFormData.phone || '',
+        role: 'admin',
+        branch_id: selectedBranch.id
       });
 
-      if (authError) throw authError;
-
-      if (authData.user) {
-        const { error: profileError } = await supabase.rpc('create_user_profile', {
-          p_user_id: authData.user.id,
-          p_email: adminFormData.email,
-          p_full_name: adminFormData.full_name,
-          p_phone: adminFormData.phone || null,
-          p_role: 'admin',
-          p_branch_id: selectedBranch.id
-        });
-
-        if (profileError) throw profileError;
-      }
-
+      alert('Branch Admin created successfully!');
       setShowAdminModal(false);
-      setAdminFormData({ email: '', password: '', full_name: '', phone: '' });
-      setSelectedBranch(null);
-      alert('Admin user created successfully!');
+      setAdminFormData({
+        full_name: '',
+        email: '',
+        password: '',
+        phone: ''
+      });
+      loadBranches();
     } catch (error: any) {
-      console.error('Error creating admin:', error);
-      alert(error.message || 'Failed to create admin user');
+      console.error('Error creating branch admin:', error);
+      alert(error.message || 'Failed to create branch admin');
     } finally {
       setSubmitLoading(false);
     }
@@ -209,7 +221,7 @@ export function Branches() {
 
       <div className="bg-white dark:bg-gray-800 rounded-md shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
               <tr>
                 <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Branch Name</th>
@@ -222,7 +234,7 @@ export function Branches() {
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
               {filteredBranches.map((branch) => (
-                <tr key={branch.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition">
+                <tr key={branch.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/30 transition">
                   <td className="px-3 py-2.5 text-gray-900 dark:text-white font-medium">{branch.name}</td>
                   <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{branch.email || '-'}</td>
                   <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{branch.phone || '-'}</td>
@@ -245,6 +257,14 @@ export function Branches() {
                         title="Create Admin"
                       >
                         <Users className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleToggleStatus(branch)}
+                        className={`p-1.5 rounded transition ${branch.is_active ? 'text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20' : 'text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20'}`}
+                        title={branch.is_active ? 'Deactivate Branch' : 'Activate Branch'}
+                        disabled={submitLoading}
+                      >
+                        <Power className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleEdit(branch)}

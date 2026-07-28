@@ -43,26 +43,25 @@ export function Suppliers() {
 
     useEffect(() => {
         loadSuppliers();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadSuppliers() {
-        if (!profile?.branch_id) return;
         setLoading(true);
-        const { data, error } = await supabase
-            .from('suppliers')
-            .select('*')
-            .eq('branch_id', profile.branch_id)
-            .order('name', { ascending: true });
+        const bid = profile?.branch_id;
+        let query = supabase.from('suppliers').select('*');
+        if (bid) {
+            query = query.eq('branch_id', bid);
+        }
+        const { data, error } = await query.order('name', { ascending: true });
         if (!error) setSuppliers(data || []);
         setLoading(false);
     }
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         setError(null);
-        const payload = { ...formData, branch_id: profile.branch_id };
+        const payload = { ...formData, branch_id: profile?.branch_id || null };
 
         let res;
         if (editingSupplier) {
@@ -124,9 +123,9 @@ export function Suppliers() {
 
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Supplier Name</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Contact Person</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Email / Phone</th>

@@ -13,9 +13,10 @@ interface Props {
     onAddNew?: () => void;
     addNewLabel?: string;
     multiSelect?: boolean;
+    creatable?: boolean;
 }
 
-const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm transition-all shadow-sm";
+const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-base md:text-sm transition-all shadow-sm";
 const labelCls = "block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1.5";
 
 export function SearchDropdown({
@@ -23,7 +24,8 @@ export function SearchDropdown({
     selectedId, selectedIds = [],
     onSelect, onSelectMultiple,
     displayFn, onAddNew, addNewLabel,
-    multiSelect = false
+    multiSelect = false,
+    creatable = false
 }: Props) {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
@@ -37,7 +39,16 @@ export function SearchDropdown({
         return () => document.removeEventListener('mousedown', handler);
     }, []);
 
-    const getLabel = (i: any) => displayFn ? displayFn(i) : i.full_name || i.name || i.label || '';
+    const getLabel = (i: any): string => {
+        if (!i) return '';
+        try {
+            if (displayFn) return displayFn(i) ?? '';
+        } catch {
+            // displayFn threw — fall through to safe defaults
+        }
+        // Safe fallback: use known string fields only, never coerce the whole object
+        return String(i.full_name || i.name || i.label || i.title || i.id || '');
+    };
 
     const selectedItem = multiSelect ? null : items.find((i: any) => i.id === selectedId);
     const selectedItemsList = multiSelect ? items.filter((i: any) => selectedIds.includes(i.id)) : [];
@@ -46,6 +57,8 @@ export function SearchDropdown({
         const text = getLabel(i);
         return text.toLowerCase().includes(search.toLowerCase());
     });
+
+    const isExactMatch = items.some(i => getLabel(i).toLowerCase() === search.toLowerCase());
 
     const toggleSelection = (id: string) => {
         if (multiSelect && onSelectMultiple) {
@@ -66,8 +79,8 @@ export function SearchDropdown({
             <button type="button" onClick={() => setIsOpen(v => !v)}
                 className={`${inputCls} flex flex-wrap items-center gap-1.5 min-h-[42px] py-1.5 text-left ${(selectedItem || selectedItemsList.length > 0) ? 'border-green-200 dark:border-green-900' : ''}`}>
                 {!multiSelect && (
-                    <span className={selectedItem ? 'text-gray-900 dark:text-white font-medium' : 'text-gray-400'}>
-                        {selectedItem ? getLabel(selectedItem) : placeholder}
+                    <span className={(selectedItem || (creatable && selectedId)) ? 'text-gray-900 dark:text-white font-medium' : 'text-gray-400'}>
+                        {selectedItem ? getLabel(selectedItem) : (creatable && selectedId ? selectedId : placeholder)}
                     </span>
                 )}
                 {multiSelect && (
@@ -107,6 +120,19 @@ export function SearchDropdown({
                                 <Plus className="w-3.5 h-3.5" />
                             </div>
                             {addNewLabel || 'Add New'}
+                        </button>
+                    )}
+
+                    {creatable && search.trim() && !isExactMatch && (
+                        <button
+                            type="button"
+                            onClick={() => toggleSelection(search.trim().toUpperCase())}
+                            className="w-full text-left px-4 py-2.5 text-xs font-bold text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2 transition-colors"
+                        >
+                            <div className="w-5 h-5 bg-blue-100 dark:bg-blue-900/40 rounded flex items-center justify-center">
+                                <Plus className="w-3.5 h-3.5" />
+                            </div>
+                            Use manual entry: "{search.trim().toUpperCase()}"
                         </button>
                     )}
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { createStaffUserAccount } from '../utils/userCreation';
 import { Plus, Search, Edit2, Eye, Phone, Calendar, Filter, X, PhoneCall } from 'lucide-react';
 
 interface Receptionist {
@@ -86,36 +87,21 @@ export function Receptionists() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      await createStaffUserAccount({
         email: formData.email,
         password: formData.password,
+        full_name: formData.full_name,
+        phone: formData.phone || '',
+        role: 'receptionist',
+        branch_id: formData.branch_id || profile?.branch_id || null
       });
 
-      if (authError) throw authError;
-
-      if (authData.user) {
-        const { error: userError } = await supabase
-          .from('users')
-          .insert([{
-            id: authData.user.id,
-            email: formData.email,
-            full_name: formData.full_name,
-            phone: formData.phone,
-            address: formData.address,
-            branch_id: formData.branch_id || profile?.branch_id,
-            role: 'receptionist',
-            is_active: true
-          }]);
-
-        if (userError) throw userError;
-
-        setShowModal(false);
-        resetForm();
-        loadReceptionists();
-      }
-    } catch (error) {
+      setShowModal(false);
+      resetForm();
+      loadReceptionists();
+    } catch (error: any) {
       console.error('Error creating receptionist:', error);
-      alert('Failed to create receptionist');
+      alert(error.message || 'Failed to create receptionist');
     }
   };
 
@@ -249,7 +235,7 @@ export function Receptionists() {
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -278,7 +264,7 @@ export function Receptionists() {
                 </tr>
               ) : (
                 filteredReceptionists.map((receptionist) => (
-                  <tr key={receptionist.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                  <tr key={receptionist.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div className="w-10 h-10 bg-teal-100 dark:bg-teal-900/30 rounded-full flex items-center justify-center">

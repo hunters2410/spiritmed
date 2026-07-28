@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { createStaffUserAccount } from '../utils/userCreation';
 import { Plus, Search, Edit2, Eye, Phone, Mail, Calendar, Filter, X, Clock, Stethoscope, Trash2 } from 'lucide-react';
 
 interface Doctor {
@@ -74,7 +75,7 @@ export function Doctors() {
     try {
       let query = supabase
         .from('users')
-        .select('*')
+        .select('*, roles:users_role_id_fkey(name)')
         .eq('role', 'doctor')
         .order('created_at', { ascending: false });
 
@@ -126,36 +127,21 @@ export function Doctors() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      await createStaffUserAccount({
         email: formData.email,
         password: formData.password,
+        full_name: formData.full_name,
+        phone: formData.phone || '',
+        role: 'doctor',
+        branch_id: formData.branch_id || profile?.branch_id || null
       });
 
-      if (authError) throw authError;
-
-      if (authData.user) {
-        const { error: userError } = await supabase
-          .from('users')
-          .insert([{
-            id: authData.user.id,
-            email: formData.email,
-            full_name: formData.full_name,
-            phone: formData.phone,
-            address: formData.address,
-            branch_id: formData.branch_id || profile?.branch_id,
-            role: 'doctor',
-            is_active: true
-          }]);
-
-        if (userError) throw userError;
-
-        setShowModal(false);
-        resetForm();
-        loadDoctors();
-      }
-    } catch (error) {
+      setShowModal(false);
+      resetForm();
+      loadDoctors();
+    } catch (error: any) {
       console.error('Error creating doctor:', error);
-      alert('Failed to create doctor');
+      alert(error.message || 'Failed to create doctor');
     }
   };
 
@@ -445,7 +431,7 @@ export function Doctors() {
                 </tr>
               ) : (
                 filteredDoctors.map((doctor) => (
-                  <tr key={doctor.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                  <tr key={doctor.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                     <td className="px-6 py-4 whitespace-nowrap border-b border-r border-gray-200 dark:border-gray-700">
                       <div className="flex items-center">
                         <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">

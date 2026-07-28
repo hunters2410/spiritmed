@@ -11,11 +11,12 @@ export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : createClient('https://placeholder.supabase.co', 'placeholder');
 
-export type UserRole = 'super_admin' | 'admin' | 'doctor' | 'nurse' | 'receptionist' | 'accountant';
+export type UserRole = 'super_admin' | 'admin' | 'doctor' | 'nurse' | 'receptionist' | 'accountant' | 'patient';
 
 export interface UserProfile {
   id: string;
   branch_id: string | null;
+  role_id: string | null;
   email: string;
   full_name: string;
   role: UserRole;
@@ -28,6 +29,7 @@ export interface UserProfile {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  patient_data?: any;
 }
 
 export interface Branch {
@@ -45,4 +47,16 @@ export interface Branch {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface Notification {
+  id: string;
+  branch_id: string | null;
+  user_id: string;
+  title: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  is_read: boolean;
+  link: string | null;
+  created_at: string;
 }

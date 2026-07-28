@@ -31,16 +31,16 @@ export function MedicineFrequencies() {
 
     useEffect(() => {
         loadFrequencies();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadFrequencies() {
-        if (!profile?.branch_id) return;
         setLoading(true);
-        const { data, error } = await supabase
-            .from('medicine_frequencies')
-            .select('*')
-            .or(`branch_id.eq.${profile.branch_id},branch_id.is.null`)
-            .order('name', { ascending: true });
+        const bid = profile?.branch_id;
+        let query = supabase.from('medicine_frequencies').select('*');
+        if (bid) {
+            query = query.or(`branch_id.eq.${bid},branch_id.is.null`);
+        }
+        const { data, error } = await query.order('name', { ascending: true });
         if (!error) setFrequencies(data || []);
         setLoading(false);
     }
@@ -56,10 +56,9 @@ export function MedicineFrequencies() {
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         setError(null);
-        const payload = { ...formData, branch_id: profile.branch_id };
+        const payload = { ...formData, branch_id: profile?.branch_id || null };
 
         let res;
         if (editingFreq) {
@@ -112,9 +111,9 @@ export function MedicineFrequencies() {
 
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Code/Name</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Description</th>
                                 <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Actions</th>

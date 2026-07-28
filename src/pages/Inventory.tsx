@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Plus, Search, Package, AlertTriangle, ArrowUpRight, ArrowDownLeft, Filter, X, Edit2, History, ShoppingCart, Clock, Trash2, Building2, Layers, Ruler, ChevronDown } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
+import { notificationService } from '../utils/notificationService';
 
 const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm";
 const labelCls = "block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1";
@@ -143,7 +144,7 @@ export function Inventory() {
 
     useEffect(() => {
         loadData();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     const loadData = async () => {
         setLoading(true);
@@ -156,11 +157,20 @@ export function Inventory() {
     };
 
     const loadMeta = async () => {
-        if (!profile?.branch_id) return;
+        let catQ = supabase.from('inventory_categories').select('id, name');
+        let unitQ = supabase.from('inventory_units').select('id, name');
+        let supQ = supabase.from('suppliers').select('id, name');
+
+        if (profile?.branch_id) {
+            catQ = catQ.eq('branch_id', profile.branch_id);
+            unitQ = unitQ.eq('branch_id', profile.branch_id);
+            supQ = supQ.eq('branch_id', profile.branch_id);
+        }
+
         const [catRes, unitRes, supRes] = await Promise.all([
-            supabase.from('inventory_categories').select('id, name').eq('branch_id', profile.branch_id).order('name'),
-            supabase.from('inventory_units').select('id, name').eq('branch_id', profile.branch_id).order('name'),
-            supabase.from('suppliers').select('id, name').eq('branch_id', profile.branch_id).order('name')
+            catQ.order('name'),
+            unitQ.order('name'),
+            supQ.order('name')
         ]);
         if (!catRes.error) setCategories(catRes.data || []);
         if (!unitRes.error) setUnits(unitRes.data || []);
@@ -168,13 +178,14 @@ export function Inventory() {
     };
 
     const loadInventory = async () => {
-        if (!profile?.branch_id) return;
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('inventory_items')
-                .select('*, category:inventory_categories(name), unit:inventory_units(name), supplier:suppliers(name)')
-                .eq('branch_id', profile.branch_id)
-                .order('name');
+                .select('*, category:inventory_categories(name), unit:inventory_units(name), supplier:suppliers(name)');
+            if (profile?.branch_id) {
+                query = query.eq('branch_id', profile.branch_id);
+            }
+            const { data, error } = await query.order('name');
             if (error) throw error;
             setItems(data || []);
         } catch (error) {
@@ -185,14 +196,14 @@ export function Inventory() {
     };
 
     const loadTransactions = async () => {
-        if (!profile?.branch_id) return;
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('inventory_transactions')
-                .select('*, item:inventory_items(name)')
-                .eq('branch_id', profile.branch_id)
-                .order('created_at', { ascending: false })
-                .limit(10);
+                .select('*, item:inventory_items(name)');
+            if (profile?.branch_id) {
+                query = query.eq('branch_id', profile.branch_id);
+            }
+            const { data, error } = await query.order('created_at', { ascending: false }).limit(10);
             if (error) throw error;
             setTransactions(data || []);
         } catch (error) {
@@ -201,13 +212,14 @@ export function Inventory() {
     };
 
     const loadAllTransactions = async () => {
-        if (!profile?.branch_id) return;
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('inventory_transactions')
-                .select('*, item:inventory_items(name)')
-                .eq('branch_id', profile.branch_id)
-                .order('created_at', { ascending: false });
+                .select('*, item:inventory_items(name)');
+            if (profile?.branch_id) {
+                query = query.eq('branch_id', profile.branch_id);
+            }
+            const { data, error } = await query.order('created_at', { ascending: false });
             if (error) throw error;
             setAllTransactions(data || []);
             setShowHistoryModal(true);
@@ -363,6 +375,29 @@ export function Inventory() {
 
             if (itemError) throw itemError;
 
+            // Check for Low Stock and Notify Admins
+            if (newQuantity <= item.reorder_level) {
+                // Find admins in this branch to notify
+                let userQ = supabase.from('users').select('id').in('role', ['admin', 'super_admin']);
+                if (profile?.branch_id) {
+                    userQ = userQ.eq('branch_id', profile.branch_id);
+                }
+                const { data: admins } = await userQ;
+
+                if (admins && admins.length > 0) {
+                    for (const admin of admins) {
+                        await notificationService.send({
+                            userId: admin.id,
+                            title: 'Low Stock Alert',
+                            message: `${item.name} is low on stock (${newQuantity} remaining, reorder level: ${item.reorder_level}).`,
+                            type: 'warning',
+                            link: '/inventory',
+                            branchId: profile?.branch_id
+                        });
+                    }
+                }
+            }
+
             if (profile?.id && profile?.branch_id) {
                 await logActivity(supabase, {
                     userId: profile.id,
@@ -511,7 +546,7 @@ export function Inventory() {
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
                 <div className="lg:col-span-8 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="overflow-x-auto">
-                        <table className="w-full">
+                        <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
                             <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
                                 <tr>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Item Details</th>
@@ -523,7 +558,7 @@ export function Inventory() {
                             </thead>
                             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                                 {filteredItems.map((item) => (
-                                    <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                                    <tr key={item.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                                         <td className="px-6 py-4">
                                             <div className="text-sm font-bold text-gray-900 dark:text-white">{item.name}</div>
                                             <div className="text-xs text-gray-500">{item.unit?.name || 'No Unit'}</div>
@@ -826,7 +861,7 @@ export function Inventory() {
                             </button>
                         </div>
                         <div className="overflow-y-auto flex-1 border border-gray-100 dark:border-gray-700 rounded-lg">
-                            <table className="w-full text-sm">
+                            <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                                 <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0 z-10">
                                     <tr>
                                         <th className="px-4 py-3 text-left font-bold text-gray-500 uppercase tracking-wider text-[10px]">Date</th>
@@ -838,7 +873,7 @@ export function Inventory() {
                                 </thead>
                                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                                     {allTransactions.map((tx) => (
-                                        <tr key={tx.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50">
+                                        <tr key={tx.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/50">
                                             <td className="px-4 py-3 text-gray-500 text-[11px] whitespace-nowrap">
                                                 {new Date(tx.created_at).toLocaleString()}
                                             </td>

@@ -42,12 +42,16 @@ export function OnlineBookings() {
     }, [profile, dateFilters]);
 
     const checkSettings = async () => {
-        const { data } = await supabase
-            .from('system_settings')
-            .select('value')
-            .eq('setting_key', 'online_booking_enabled')
-            .single();
-        if (data) setIsBookingEnabled(data.value);
+        try {
+            const { data } = await supabase
+                .from('system_settings')
+                .select('value')
+                .eq('setting_key', 'online_booking_enabled')
+                .maybeSingle();
+            if (data) setIsBookingEnabled(data.value);
+        } catch (err) {
+            console.warn('Could not load booking setting:', err);
+        }
     };
 
     const toggleBookingEnabled = async () => {
@@ -118,7 +122,8 @@ export function OnlineBookings() {
             if (existingPatient) {
                 patientId = existingPatient.id;
             } else {
-                // Create new patient
+                // Create new patient — guard branch_id against missing/corrupted value from the public form
+                const safeBranchId = booking.branch_id || profile?.branch_id;
                 const { data: newPatient, error: pError } = await supabase
                     .from('patients')
                     .insert([{
@@ -127,7 +132,7 @@ export function OnlineBookings() {
                         email: booking.patient_email,
                         gender: booking.patient_gender,
                         date_of_birth: booking.patient_dob,
-                        branch_id: booking.branch_id,
+                        branch_id: safeBranchId,
                         patient_number: generatePatientNumber(),
                         status: 'active'
                     }])
@@ -138,11 +143,12 @@ export function OnlineBookings() {
                 patientId = newPatient.id;
             }
 
-            // 2. Create appointment
+            // 2. Create appointment — use safeBranchId for consistency
+            const appointmentBranchId = booking.branch_id || profile?.branch_id;
             const { data: appointment, error: aError } = await supabase
                 .from('appointments')
                 .insert([{
-                    branch_id: booking.branch_id,
+                    branch_id: appointmentBranchId,
                     patient_id: patientId,
                     doctor_id: booking.doctor_id,
                     appointment_date: booking.appointment_slots.start_time,
@@ -271,9 +277,9 @@ export function OnlineBookings() {
                 </div>
 
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left">
+                    <table className="w-full text-left border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 text-gray-500 text-xs font-bold uppercase tracking-wider">
+                            <tr className="bg-gray-100 text-gray-500 text-xs font-bold uppercase tracking-wider">
                                 <th className="px-6 py-4">Patient Details</th>
                                 <th className="px-6 py-4">Appointment Info</th>
                                 <th className="px-6 py-4">Booked At</th>
@@ -295,7 +301,7 @@ export function OnlineBookings() {
                                     </td>
                                 </tr>
                             ) : filteredBookings.map((booking) => (
-                                <tr key={booking.id} className="hover:bg-gray-50 transition-colors">
+                                <tr key={booking.id} className="hover:bg-gray-100 transition-colors">
                                     <td className="px-6 py-4">
                                         <div className="space-y-1">
                                             <div className="font-bold text-gray-900">{booking.patient_full_name}</div>

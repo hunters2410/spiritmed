@@ -21,12 +21,18 @@ interface PaymentData {
     amount: number;
     payment_method: string;
     payment_date: string;
+    discount_amount?: number;
+    target_portion?: string;
     notes: string;
-    invoice: {
-        invoice_number: string;
+    bill: {
+        bill_number: string;
         total_amount: number;
         paid_amount: number;
         balance: number;
+        medical_aid_amount?: number;
+        shortfall_amount?: number;
+        medical_aid_balance?: number;
+        shortfall_balance?: number;
         patient: {
             full_name: string;
             patient_number: string;
@@ -48,203 +54,204 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { scale: 2 });
+        const canvas = await html2canvas(printRef.current, { 
+            scale: 2,
+            useCORS: true,
+            allowTaint: true
+        });
         const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a5'); // Standard receipt size
+        const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
         pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`RECEIPT_${data.invoice.invoice_number}_${data.invoice.patient.full_name}.pdf`);
+        pdf.save(`RECEIPT_${data.bill.bill_number}.pdf`);
     };
 
     const handleSendEmail = async () => {
-        if (!printRef.current || !data.invoice.patient.email) {
+        if (!printRef.current || !data.bill.patient.email) {
             alert('Patient email is missing.');
             return;
         }
 
         try {
             setIsSending(true);
-            setSendSuccess(false);
-
-            // 1. Generate PDF
-            const canvas = await html2canvas(printRef.current, { scale: 2 });
+            const canvas = await html2canvas(printRef.current, { 
+                scale: 2,
+                useCORS: true,
+                allowTaint: true
+            });
             const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a5');
+            const pdf = new jsPDF('p', 'mm', 'a4');
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
             pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
             
             const pdfBlob = pdf.output('blob');
-            const fileName = `RCPT_${data.invoice.invoice_number}_${Date.now()}.pdf`;
+            const fileName = `RCPT_${data.bill.bill_number}_${Date.now()}.pdf`;
             const filePath = `receipts/${data.id}/${fileName}`;
 
-            // 2. Upload to Storage
-            const { error: uploadError } = await supabase.storage
-                .from('financial_documents')
-                .upload(filePath, pdfBlob, {
-                    contentType: 'application/pdf',
-                    upsert: true
-                });
+            await supabase.storage.from('financial_documents').upload(filePath, pdfBlob, { contentType: 'application/pdf', upsert: true });
 
-            if (uploadError) throw uploadError;
+            const { data: { publicUrl } } = supabase.storage.from('financial_documents').getPublicUrl(filePath);
 
-            // 3. Get Public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from('financial_documents')
-                .getPublicUrl(filePath);
-
-            // 4. Send Email
-            const result = await emailService.sendEmail({
-                recipientEmail: data.invoice.patient.email,
-                recipientName: data.invoice.patient.full_name,
-                subject: `Payment Receipt for Invoice ${data.invoice.invoice_number}`,
-                body: `Dear ${data.invoice.patient.full_name},\n\nThank you for your payment of $${data.amount.toLocaleString()} for Invoice ${data.invoice.invoice_number}.\n\nYou can view and download your official receipt here: ${publicUrl}\n\nThank you for choosing ${branch.name}.`,
+            await emailService.sendEmail({
+                recipientEmail: data.bill.patient.email,
+                recipientName: data.bill.patient.full_name,
+                subject: `Payment Receipt - ${data.bill.bill_number}`,
+                body: `Dear ${data.bill.patient.full_name},\n\nThank you for your payment. Please find your official receipt attached.`,
                 branchId: branch.id,
                 referenceId: data.id,
                 referenceType: 'receipt',
                 fileUrl: publicUrl
             });
 
-            if (result.success) {
-                setSendSuccess(true);
-                setTimeout(() => setSendSuccess(false), 3000);
-            } else {
-                throw new Error(result.error);
-            }
+            setSendSuccess(true);
+            setTimeout(() => setSendSuccess(false), 3000);
         } catch (error: any) {
-            console.error('Email error:', error);
-            alert(`Failed to send email: ${error.message}`);
+            alert(`Failed: ${error.message}`);
         } finally {
             setIsSending(false);
         }
     };
 
-    const handlePrint = () => {
-        window.print();
-    };
-
     return (
-        <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4 md:p-8 flex flex-col md:flex-row gap-8 items-start justify-center">
+        <div className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col md:flex-row gap-6 items-start justify-center">
             {/* Sidebar Actions */}
-            <div className="w-full md:w-64 space-y-3 print:hidden order-2 md:order-2">
-                <button onClick={onBack} className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-4 py-2.5 rounded-lg font-bold text-xs transition shadow-sm">
-                    <ArrowLeft className="w-4 h-4 text-cyan-600" /> Back to Dashboard
+            <div className="w-full md:w-64 space-y-2 print:hidden">
+                <button onClick={onBack} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <ArrowLeft className="w-4 h-4" /> Back
                 </button>
-                <button onClick={handlePrint} className="w-full flex items-center justify-center gap-3 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2.5 rounded-lg font-bold text-xs transition shadow-md">
-                    <Printer className="w-4 h-4" /> Print Receipt
+                <button onClick={() => window.print()} className="w-full flex items-center justify-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded shadow-sm text-sm">
+                    <Printer className="w-4 h-4" /> Print
                 </button>
-                <button onClick={handleDownloadPdf} className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-4 py-2.5 rounded-lg font-bold text-xs transition shadow-sm">
-                    <Download className="w-4 h-4 text-cyan-600" /> Download PDF
+                <button onClick={handleDownloadPdf} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <Download className="w-4 h-4" /> PDF
                 </button>
-                <button 
-                    onClick={handleSendEmail} 
-                    disabled={isSending}
-                    className={`w-full flex items-center justify-center gap-3 px-4 py-2.5 rounded-lg font-bold text-xs transition shadow-sm ${
-                        sendSuccess ? 'bg-green-600 text-white' : 'bg-white hover:bg-gray-50 text-gray-700 border border-gray-200'
-                    }`}
-                >
-                    {isSending ? <Loader2 className="w-4 h-4 animate-spin text-cyan-600" /> : sendSuccess ? <CheckCircle className="w-4 h-4" /> : <Send className="w-4 h-4 text-cyan-600" />}
-                    {isSending ? 'Sending...' : sendSuccess ? 'Email Sent!' : 'Send Via Email'}
+                <button onClick={handleSendEmail} disabled={isSending} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    {isSending ? <Loader2 className="w-4 h-4 animate-spin text-cyan-600" /> : sendSuccess ? <CheckCircle className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+                    {isSending ? 'Sending...' : sendSuccess ? 'Sent!' : 'Email'}
                 </button>
             </div>
 
             {/* Document View */}
-            <div className="flex-1 flex justify-center order-1 md:order-1">
-                <div
-                    ref={printRef}
-                    className="bg-white text-gray-900 w-full max-w-[148mm] min-h-[210mm] p-[10mm] shadow-xl font-sans border-t-8 border-cyan-600 print:shadow-none print:p-0"
-                >
+            <div className="flex-1 max-w-[210mm]">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
                     {/* Header */}
-                    <div className="flex justify-between items-start mb-8 border-b border-gray-100 pb-4">
-                        <div className="flex items-center gap-4">
-                            {branch.logo_url ? (
-                                <img src={branch.logo_url} alt="Clinic Logo" className="h-12 w-auto object-contain" />
+                    <div className="flex justify-between items-start border-b pb-6 mb-6">
+                        <div>
+                            {branch.logo_url || branch.signature_url ? (
+                                <img src={branch.logo_url || branch.signature_url} alt="Logo" className="h-20 w-auto" />
                             ) : (
-                                <div className="w-12 h-12 bg-cyan-50 flex items-center justify-center rounded-lg text-cyan-600 font-black text-xl border-2 border-cyan-100 italic">SM</div>
+                                <div className="w-16 h-16 bg-gray-100 border flex items-center justify-center text-xs font-bold text-gray-400">LOGO</div>
                             )}
-                            <h2 className="text-xl font-black text-gray-800 uppercase tracking-tighter">Receipt</h2>
                         </div>
-                        <div className="text-right text-[8px] space-y-0.5 text-gray-400 font-medium">
-                            <p className="text-gray-900 font-bold">{branch.phone}</p>
-                            <p>{branch.email}</p>
-                            <p className="max-w-[120px] ml-auto uppercase">{branch.address}</p>
-                        </div>
-                    </div>
-
-                    {/* Receipt Details */}
-                    <div className="bg-gray-50 p-6 rounded-xl mb-8 space-y-4">
-                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
-                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Receipt Date</span>
-                            <span className="text-sm font-bold text-gray-900">{new Date(data.payment_date).toLocaleString()}</span>
-                        </div>
-                        
-                        <div className="space-y-1">
-                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Received From</span>
-                            <p className="text-lg font-black text-gray-900 uppercase leading-none">{data.invoice.patient.full_name}</p>
-                            <p className="text-xs font-bold text-cyan-600 font-mono tracking-tighter">Patient Number: {data.invoice.patient.patient_number}</p>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4 pt-2">
-                            <div>
-                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Invoice Ref</span>
-                                <p className="text-sm font-bold text-gray-900 font-mono">{data.invoice.invoice_number}</p>
-                            </div>
-                            <div>
-                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Payment Method</span>
-                                <p className="text-sm font-bold text-gray-900 uppercase">{data.payment_method}</p>
+                        <div className="text-right">
+                            <h1 className="text-2xl font-bold uppercase mb-1">{branch.name}</h1>
+                            <div className="text-[10px] text-gray-600 space-y-0.5">
+                                <p>{branch.address}</p>
+                                <p><b>Phone:</b> {branch.phone}</p>
+                                <p><b>Email:</b> {branch.email}</p>
+                                <p className="pt-2"><b>Date:</b> {new Date().toLocaleDateString()}</p>
                             </div>
                         </div>
                     </div>
 
-                    {/* Amount Block */}
-                    <div className="text-center py-8 border-y-2 border-dashed border-gray-200 mb-8">
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Amount Received</span>
-                        <div className="text-5xl font-black text-gray-900 font-mono">
-                            ${data.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    <div className="text-center mb-10">
+                        <h2 className="text-lg font-bold border-y py-1 uppercase tracking-widest">Official Payment Receipt</h2>
+                    </div>
+
+                    <div className="bg-gray-50 border p-6 mb-10 text-[11px] grid grid-cols-2 gap-8">
+                        <div>
+                            <p className="font-bold text-gray-500 uppercase text-[9px] mb-1">Received From:</p>
+                            <p className="text-sm font-bold uppercase">{data.bill.patient.full_name}</p>
+                            <p>ID: {data.bill.patient.patient_number}</p>
                         </div>
+                        <div className="text-right">
+                            <p className="font-bold text-gray-500 uppercase text-[9px] mb-1">Receipt Details:</p>
+                            <p><b>Invoice #:</b> {data.bill.bill_number}</p>
+                            <p><b>Payment Date:</b> {new Date(data.payment_date).toLocaleString()}</p>
+                            <p><b>Method:</b> <span className="uppercase font-bold">{data.payment_method.toUpperCase()}</span></p>
+                        </div>
+                    </div>
+
+                    <div className="py-12 border-y-2 border-double border-gray-200 mb-10 text-center">
+                        <p className="uppercase text-[10px] font-bold text-gray-400 tracking-widest mb-2">Total Amount Received</p>
+                        <p className="text-5xl font-bold">${data.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                     </div>
 
                     {data.notes && (
-                        <div className="mb-6">
-                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Notes / Reference</span>
-                            <p className="text-xs text-gray-600 italic leading-relaxed">{data.notes}</p>
+                        <div className="mb-10 text-[11px]">
+                            <p className="font-bold uppercase text-gray-500 text-[9px] mb-1">Notes / Reference:</p>
+                            <p className="italic text-gray-700">{data.notes}</p>
                         </div>
                     )}
 
-                    {/* Financial Summary */}
-                    <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 space-y-2 mb-8">
-                        <div className="flex justify-between text-[8px] font-bold text-gray-400 uppercase">
-                            <span>Statement Summary</span>
+                    {/* Split Financial Summary */}
+                    {(data.bill.medical_aid_amount || 0) > 0 && (
+                        <div className="mb-10 overflow-hidden border border-gray-200 rounded-lg">
+                            <table className="w-full text-[10px] text-left border-collapse">
+                                <thead className="bg-gray-100 uppercase font-black text-gray-500 tracking-wider">
+                                    <tr>
+                                        <th className="px-4 py-2 border-r">Billing Split</th>
+                                        <th className="px-4 py-2 border-r text-right">Total Amount</th>
+                                        <th className="px-4 py-2 border-r text-right">Running Bal.</th>
+                                        <th className="px-4 py-2 text-right">Portion Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y dark:divide-gray-700">
+                                    <tr>
+                                        <td className="px-4 py-2 border-r font-bold">Medical Aid Portion</td>
+                                        <td className="px-4 py-2 border-r text-right font-mono">${(data.bill.medical_aid_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                        <td className="px-4 py-2 border-r text-right font-mono text-red-600">${(data.bill.medical_aid_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                        <td className="px-4 py-2 text-right">
+                                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase ${(data.bill.medical_aid_balance || 0) <= 0 ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                {(data.bill.medical_aid_balance || 0) <= 0 ? 'CLEARED' : 'PENDING'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    <tr className="bg-gray-50/50">
+                                        <td className="px-4 py-2 border-r font-bold">Patient Shortfall</td>
+                                        <td className="px-4 py-2 border-r text-right font-mono">${(data.bill.shortfall_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                        <td className="px-4 py-2 border-r text-right font-mono text-red-600">${(data.bill.shortfall_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                        <td className="px-4 py-2 text-right">
+                                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase ${(data.bill.shortfall_balance || 0) <= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                {(data.bill.shortfall_balance || 0) <= 0 ? 'CLEARED' : 'DUE'}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
-                        <div className="flex justify-between text-[10px] text-gray-600 font-medium uppercase">
-                            <span>Total Bill Amount</span>
-                            <span className="font-mono text-gray-900">${(data.invoice.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    )}
+
+                    <div className="border border-gray-100 bg-gray-50 p-4 mb-10 text-[11px] space-y-2">
+                        <p className="font-bold uppercase text-[9px] text-gray-400 border-b pb-1">Comprehensive Statement Summary:</p>
+                        <div className="flex justify-between">
+                            <span>Total Combined Bill Amount:</span>
+                            <span className="font-black">${(data.bill.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                         </div>
-                        <div className="flex justify-between text-[10px] text-green-600 font-medium uppercase">
-                            <span>Total Paid To Date</span>
-                            <span className="font-mono">${(data.invoice.paid_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                        </div>
-                        <div className="flex justify-between text-xs text-amber-600 font-black uppercase pt-1 border-t border-gray-200 mt-1">
-                            <span>Remaining Balance</span>
-                            <span className="font-mono">${(data.invoice.balance ?? data.invoice.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        {data.discount_amount && data.discount_amount > 0 ? (
+                            <div className="flex justify-between text-amber-600 font-bold">
+                                <span>Total Discount Applied:</span>
+                                <span>-${data.discount_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            </div>
+                        ) : null}
+                        <div className="flex justify-between font-black text-sm pt-1 bg-yellow-100/50 px-2 rounded">
+                            <span className="uppercase tracking-widest text-[10px]">Net Remaining Balance:</span>
+                            <span className="text-red-600">${(data.bill.balance ?? data.bill.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                         </div>
                     </div>
 
-                    {/* Footer */}
-                    <div className="flex flex-col items-center justify-end text-center space-y-1 mt-12 pb-8">
-                        {branch.signature_url ? (
-                            <img src={branch.signature_url} alt="Authorized Signature" className="h-12 w-auto mb-1" />
-                        ) : (
-                            <div className="w-40 h-10 border-b border-gray-200 mb-2"></div>
-                        )}
-                        <p className="font-black uppercase text-gray-900 leading-none text-[10px]">Administrative Office</p>
-                        <p className="text-gray-400 font-bold uppercase tracking-widest text-[8px]">Electronic Receipt - No Signature Required</p>
-                        
-                        <div className="mt-8 pt-4 border-t border-gray-50 w-full">
-                            <p className="text-[7px] text-gray-400 uppercase font-bold tracking-widest text-center">
-                                Thank you for your payment
-                            </p>
+                    <div className="flex justify-between items-end mt-20 px-4">
+                        <div className="text-[10px]">
+                            <p className="text-gray-400 italic uppercase tracking-widest">Official Electronic Receipt</p>
+                            <p className="text-gray-400 italic">No signature required.</p>
+                        </div>
+                        <div className="text-center space-y-2">
+                            <a href="https://cpyyclrhnyeibxlouwep.supabase.co/storage/v1/object/public/branding/signatures/697a3863-1de7-4615-819c-45b0d7066d67/12a67a17-cd7e-47b1-b1f3-3d678d826965_1783948399207.jpg" target="_blank" rel="noopener noreferrer" className="inline-block">
+                                <img src="https://cpyyclrhnyeibxlouwep.supabase.co/storage/v1/object/public/branding/signatures/697a3863-1de7-4615-819c-45b0d7066d67/12a67a17-cd7e-47b1-b1f3-3d678d826965_1783948399207.jpg" alt="Signature" className="h-12 w-auto mx-auto mb-2" />
+                            </a>
+                            <p className="text-[10px] font-bold uppercase">Accounts Office</p>
                         </div>
                     </div>
                 </div>
@@ -252,3 +259,4 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
         </div>
     );
 }
+

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
-    Plus, FileText, Pencil, Trash2, X, Eye, Check
+    Plus, FileText, Pencil, Trash2, X, Eye, Check, ChevronLeft, ChevronRight, Search
 } from 'lucide-react';
 import { ClinicalDocumentPrintView } from '../components/ClinicalDocumentPrintView';
 import { SearchDropdown } from '../components/SearchDropdown';
@@ -72,6 +72,26 @@ export default function AdmissionForms() {
     const [selectedDoc, setSelectedDoc] = useState<AdmissionForm | null>(null);
     const [showSuggestions, setShowSuggestions] = useState(true);
     const [branch, setBranch] = useState<any>(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const filteredForms = forms.filter(f => {
+        const query = searchQuery.toLowerCase();
+        const patientName = f.patient?.full_name?.toLowerCase() || '';
+        const patientNum = f.patient?.patient_number?.toLowerCase() || '';
+        const hospitalName = (f.hospital?.name || f.hospital || '').toLowerCase();
+        const diagnosisName = (f.diagnosis?.name || '').toLowerCase();
+        const procedureText = (f.procedure_text || '').toLowerCase();
+        const planOther = (f.plan_other || '').toLowerCase();
+        
+        return patientName.includes(query) ||
+               patientNum.includes(query) ||
+               hospitalName.includes(query) ||
+               diagnosisName.includes(query) ||
+               procedureText.includes(query) ||
+               planOther.includes(query);
+    });
 
     /* Historical Suggestions for "Other Plans" */
     const historicalPlans = Array.from(new Set(
@@ -116,29 +136,40 @@ export default function AdmissionForms() {
     const [newProcedureForm, setNewProcedureForm] = useState({ name: '', description: '' });
 
     useEffect(() => {
-        if (profile?.branch_id) {
+        if (profile) {
             loadAll();
             fetchBranchDetails();
         } else {
             setLoading(false);
         }
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function fetchBranchDetails() {
-        const { data } = await supabase.from('branches').select('*').eq('id', profile?.branch_id).maybeSingle();
+        if (!profile?.branch_id) return;
+        const { data } = await supabase.from('branches').select('*').eq('id', profile.branch_id).maybeSingle();
         setBranch(data);
     }
 
     async function loadAll() {
         setLoading(true);
         try {
-            const [forRes, patRes, diaRes, hospRes, proRes] = await Promise.all([
-                supabase.from('admission_forms').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), diagnosis:diagnoses(name), hospital:hospitals(name)').eq('branch_id', profile?.branch_id).order('created_at', { ascending: false }),
-                supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth').eq('branch_id', profile?.branch_id),
-                supabase.from('diagnoses').select('id, name, icd10_code').eq('branch_id', profile?.branch_id),
-                supabase.from('hospitals').select('*').eq('branch_id', profile?.branch_id).order('name'),
-                supabase.from('surgical_procedures').select('id, name').eq('branch_id', profile?.branch_id).order('name')
-            ]);
+            const bid = profile?.branch_id;
+
+            const forQ = supabase.from('admission_forms').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), diagnosis:diagnoses(name), hospital:hospitals(name)').order('admission_date', { ascending: false }).order('created_at', { ascending: false });
+            const patQ = supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth');
+            const diaQ = supabase.from('diagnoses').select('id, name, icd10_code');
+            const hospQ = supabase.from('hospitals').select('*').order('name');
+            const proQ = supabase.from('surgical_procedures').select('id, name').order('name');
+
+            if (bid) {
+                forQ.eq('branch_id', bid);
+                patQ.eq('branch_id', bid);
+                diaQ.eq('branch_id', bid);
+                hospQ.eq('branch_id', bid);
+                proQ.eq('branch_id', bid);
+            }
+
+            const [forRes, patRes, diaRes, hospRes, proRes] = await Promise.all([forQ, patQ, diaQ, hospQ, proQ]);
 
             setForms(forRes.data || []);
             setPatients(patRes.data || []);
@@ -263,10 +294,15 @@ export default function AdmissionForms() {
     async function handleCreatePatient(e: React.FormEvent) {
         e.preventDefault();
         const pNum = `P-${Date.now().toString().slice(-6)}`;
+        const generatedEmail = newPatientForm.email || `patient.${pNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+        const generatedPassword = 'patient123456';
         const { data, error } = await supabase.from('patients').insert([{
             ...newPatientForm,
+            email: generatedEmail,
+            password: generatedPassword,
             patient_number: pNum,
-            branch_id: profile?.branch_id
+            branch_id: profile?.branch_id,
+            status: 'active'
         }]).select().single();
 
         if (error) alert(error.message);
@@ -332,12 +368,75 @@ export default function AdmissionForms() {
                 </button>
             </div>
 
-            {/* Table */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+            {/* Search Input */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 mb-6">
+                <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input
+                        type="text"
+                        placeholder="Search admission records by patient name, number, hospital, or diagnosis..."
+                        value={searchQuery}
+                        onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                    />
+                </div>
+            </div>
+
+            {/* 📱 Mobile Card View (< md) */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    <div className="py-10 text-center text-gray-400">Loading forms...</div>
+                ) : filteredForms.length === 0 ? (
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-8 text-center text-sm font-medium text-gray-500">No admission forms found matching your search.</div>
+                ) : filteredForms.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(f => (
+                    <div key={f.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{f.patient?.full_name || 'N/A'}</h3>
+                                <p className="text-xs text-gray-500 font-mono">ID: {f.patient?.patient_number || 'N/A'}</p>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
+                                {f.hospital?.name || 'Hospital'}
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Admission Date</span>
+                                <span className="font-semibold text-gray-900 dark:text-white">{new Date(f.admission_date).toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">Dr. {f.doctor?.full_name || 'Staff'}</span>
+                            </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                            <span className="text-xs text-gray-500 font-medium truncate max-w-[180px]">{f.procedure_text || f.diagnosis?.name || 'Procedure N/A'}</span>
+                            <div className="flex items-center space-x-1">
+                                <button onClick={() => { setSelectedDoc(f); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => {
+                                    setSelectedDoc(f);
+                                    const { patient, doctor, diagnosis, hospital, created_at, updated_at, id, ...formData } = f;
+                                    setForm({
+                                        ...formData,
+                                        diagnosis_ids: formData.diagnosis_ids || []
+                                    } as any);
+                                    setShowModal(true);
+                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => handleDelete(f.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* 💻 Desktop Table View (>= md) */}
+            <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full text-left border-collapse clinical-table">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
                                 <th className="px-6 py-4">Admission Date</th>
                                 <th className="px-6 py-4">Patient</th>
                                 <th className="px-6 py-4">Hospital</th>
@@ -348,9 +447,9 @@ export default function AdmissionForms() {
                         <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
                             {loading ? (
                                 <tr><td colSpan={5} className="px-6 py-10 text-center text-gray-400">Loading forms...</td></tr>
-                            ) : forms.length === 0 ? (
+                            ) : filteredForms.length === 0 ? (
                                 <tr><td colSpan={5} className="px-6 py-10 text-center text-gray-400">No admission forms found.</td></tr>
-                            ) : forms.map(f => (
+                            ) : filteredForms.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(f => (
                                 <tr key={f.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition group">
                                     <td className="px-6 py-4 text-sm font-medium text-gray-600 dark:text-gray-400">{new Date(f.admission_date).toLocaleString()}</td>
                                     <td className="px-6 py-4">
@@ -362,7 +461,7 @@ export default function AdmissionForms() {
                                     <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">{f.hospital?.name || 'N/A'}</td>
                                     <td className="px-6 py-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{f.diagnosis?.name || 'N/A'}</td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition">
+                                        <div className="flex justify-end gap-2">
                                             <button onClick={() => { setSelectedDoc(f); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
                                             <button onClick={() => {
                                                 setSelectedDoc(f);
@@ -381,6 +480,61 @@ export default function AdmissionForms() {
                         </tbody>
                     </table>
                 </div>
+                {/* Pagination Controls */}
+                {!loading && filteredForms.length > 0 && (
+                    <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/10">
+                        <div className="flex items-center gap-4">
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filteredForms.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{filteredForms.length}</span> forms
+                            </p>
+                            <div className="flex items-center gap-1.5 border-l pl-4 border-gray-200 dark:border-gray-700">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Show</span>
+                                <select
+                                    value={itemsPerPage}
+                                    onChange={(e) => {
+                                        setItemsPerPage(Number(e.target.value));
+                                        setCurrentPage(1);
+                                    }}
+                                    className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                                >
+                                    <option value={10}>10</option>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </div>
+                        </div>
+                        {Math.ceil(filteredForms.length / itemsPerPage) > 1 && (
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                    disabled={currentPage === 1}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex gap-1">
+                                    {Array.from({ length: Math.ceil(filteredForms.length / itemsPerPage) }, (_, i) => i + 1).map(page => (
+                                        <button
+                                            key={page}
+                                            onClick={() => setCurrentPage(page)}
+                                            className={`w-8 h-8 rounded-lg font-bold transition text-xs ${currentPage === page ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent text-gray-600 dark:text-gray-400'}`}
+                                        >
+                                            {page}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(filteredForms.length / itemsPerPage)))}
+                                    disabled={currentPage === Math.ceil(filteredForms.length / itemsPerPage)}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Modal */}

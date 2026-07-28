@@ -240,7 +240,7 @@ export function Prescriptions() {
     /* pagination & search */
     const [search, setSearch] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState(10);
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
     const [branch, setBranch] = useState<any>(null);
 
@@ -262,23 +262,33 @@ export function Prescriptions() {
             supabase.from('branches').select('*').eq('id', profile.branch_id).maybeSingle()
                 .then(({ data }) => setBranch(data));
         }
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
-    useEffect(() => { loadAll(); }, [profile?.branch_id]);
+    useEffect(() => { loadAll(); }, [profile?.id]);
 
     async function loadAll() {
-        if (!profile?.branch_id) return;
+        if (!profile) return;
         setLoading(true);
-        const [rxRes, patRes, docRes, medRes, freqRes] = await Promise.all([
-            supabase.from('prescriptions')
-                .select('*, patient:patients(full_name,patient_number), doctor:users(full_name, specialization, qualifications, signature_url), prescription_items(id, period, time_unit, advice, medicine:medicines(name,dosage))')
-                .eq('branch_id', profile.branch_id)
-                .order('created_at', { ascending: false }),
-            supabase.from('patients').select('id, full_name, patient_number').eq('branch_id', profile.branch_id).eq('status', 'active').order('full_name'),
-            supabase.from('users').select('id, full_name').eq('branch_id', profile.branch_id).eq('role', 'doctor').eq('is_active', true).order('full_name'),
-            supabase.from('medicines').select('id, name, dosage').eq('branch_id', profile.branch_id).order('name'),
-            supabase.from('medicine_frequencies').select('id, name').or(`branch_id.eq.${profile.branch_id},branch_id.is.null`).order('name'),
-        ]);
+        const isSuperAdmin = profile.role === 'super_admin';
+        const branchId = profile.branch_id;
+
+        const rxQuery = supabase.from('prescriptions')
+            .select('*, patient:patients(full_name,patient_number), doctor:users(full_name, specialization, qualifications, signature_url), prescription_items(id, period, time_unit, advice, medicine:medicines(name,dosage))')
+            .order('created_at', { ascending: false });
+        const patQuery = supabase.from('patients').select('id, full_name, patient_number').eq('status', 'active').order('full_name');
+        const docQuery = supabase.from('users').select('id, full_name').eq('role', 'doctor').eq('is_active', true).order('full_name');
+        const medQuery = supabase.from('medicines').select('id, name, dosage').order('name');
+        const freqQuery = supabase.from('medicine_frequencies').select('id, name').order('name');
+
+        if (!isSuperAdmin && branchId) {
+            rxQuery.eq('branch_id', branchId);
+            patQuery.eq('branch_id', branchId);
+            docQuery.eq('branch_id', branchId);
+            medQuery.eq('branch_id', branchId);
+            freqQuery.or(`branch_id.eq.${branchId},branch_id.is.null`);
+        }
+
+        const [rxRes, patRes, docRes, medRes, freqRes] = await Promise.all([rxQuery, patQuery, docQuery, medQuery, freqQuery]);
         if (!rxRes.error) setPrescriptions((rxRes.data as any[]) || []);
         if (!patRes.error) setPatients(patRes.data || []);
         if (!docRes.error) setDoctors(docRes.data || []);
@@ -403,6 +413,41 @@ export function Prescriptions() {
     const totalPages = Math.ceil(filtered.length / itemsPerPage);
     const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+    /* ─── Print View — renders inside Layout so nav + header stay visible ─── */
+    if (viewMode === 'detailed' && showViewModal && branch) {
+        return (
+            <PrescriptionPrintView
+                prescription={{
+                    id: showViewModal.id,
+                    prescription_date: showViewModal.prescription_date,
+                    created_at: showViewModal.prescription_date,
+                    patient: showViewModal.patient as any,
+                    doctor: showViewModal.doctor as any,
+                    items: (showViewModal.prescription_items || []).map(i => ({
+                        id: i.id,
+                        medicine_name: i.medicine?.name || 'Unknown Medicine',
+                        dosage: i.medicine?.dosage || '',
+                        frequency: '',
+                        duration: `${i.period} ${i.time_unit}`,
+                        instructions: i.advice
+                    }))
+                }}
+                branch={branch}
+                onBack={() => setViewMode('table')}
+                onEdit={() => {
+                    openEdit(showViewModal);
+                    setViewMode('table');
+                }}
+                onAddNew={() => {
+                    resetForm();
+                    setShowModal(true);
+                    setViewMode('table');
+                }}
+                onSendEmail={() => alert('Email functionality coming soon')}
+            />
+        );
+    }
+
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -432,43 +477,43 @@ export function Prescriptions() {
             {/* Table */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
-                                <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">#</th>
-                                <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Date</th>
-                                <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Patient</th>
-                                <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Doctor</th>
-                                <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Items</th>
-                                <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Status</th>
-                                <th className="px-6 py-4 text-center font-bold border-b border-gray-200 dark:border-gray-700">Actions</th>
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                                <th className="px-6 py-4 text-left font-bold border border-gray-200 dark:border-gray-700">#</th>
+                                <th className="px-6 py-4 text-left font-bold border border-gray-200 dark:border-gray-700">Date</th>
+                                <th className="px-6 py-4 text-left font-bold border border-gray-200 dark:border-gray-700">Patient</th>
+                                <th className="px-6 py-4 text-left font-bold border border-gray-200 dark:border-gray-700">Doctor</th>
+                                <th className="px-6 py-4 text-center font-bold border border-gray-200 dark:border-gray-700">Items</th>
+                                <th className="px-6 py-4 text-center font-bold border border-gray-200 dark:border-gray-700">Status</th>
+                                <th className="px-6 py-4 text-center font-bold border border-gray-200 dark:border-gray-700">Actions</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        <tbody>
                             {loading ? (
-                                <tr><td colSpan={7} className="px-6 py-10 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto" /></td></tr>
+                                <tr><td colSpan={7} className="px-6 py-10 text-center border border-gray-200 dark:border-gray-700"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto" /></td></tr>
                             ) : paginated.length === 0 ? (
-                                <tr><td colSpan={7} className="px-6 py-10 text-center text-gray-500">No prescriptions found</td></tr>
+                                <tr><td colSpan={7} className="px-6 py-10 text-center text-gray-500 border border-gray-200 dark:border-gray-700">No prescriptions found</td></tr>
                             ) : paginated.map((rx, idx) => (
                                 <tr key={rx.id} className="hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-colors">
-                                    <td className="px-6 py-4 text-gray-400 font-mono text-xs">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
-                                    <td className="px-6 py-4 text-gray-700 dark:text-gray-300 font-medium">{rx.prescription_date || '—'}</td>
-                                    <td className="px-6 py-4">
+                                    <td className="px-6 py-4 text-gray-400 font-mono text-xs border border-gray-200 dark:border-gray-700">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
+                                    <td className="px-6 py-4 text-gray-700 dark:text-gray-300 font-medium border border-gray-200 dark:border-gray-700">{rx.prescription_date || '—'}</td>
+                                    <td className="px-6 py-4 border border-gray-200 dark:border-gray-700">
                                         <div className="font-bold text-gray-900 dark:text-white">{rx.patient?.full_name || '—'}</div>
                                         <div className="text-xs text-gray-400">{rx.patient?.patient_number}</div>
                                     </td>
-                                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300">{rx.doctor?.full_name || '—'}</td>
-                                    <td className="px-6 py-4 text-center">
+                                    <td className="px-6 py-4 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700">{rx.doctor?.full_name || '—'}</td>
+                                    <td className="px-6 py-4 text-center border border-gray-200 dark:border-gray-700">
                                         <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-xs font-bold">
                                             {rx.prescription_items?.length || 0} med{rx.prescription_items?.length !== 1 ? 's' : ''}
                                         </span>
                                     </td>
-                                    <td className="px-6 py-4 text-center">
+                                    <td className="px-6 py-4 text-center border border-gray-200 dark:border-gray-700">
                                         <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${rx.status === 'active' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-500'}`}>
                                             {rx.status || 'active'}
                                         </span>
                                     </td>
-                                    <td className="px-6 py-4">
+                                    <td className="px-6 py-4 border border-gray-200 dark:border-gray-700">
                                         <div className="flex justify-center gap-2">
                                             <button title="View" onClick={() => { setShowViewModal(rx); setViewMode('detailed'); }}
                                                 className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition">
@@ -491,76 +536,75 @@ export function Prescriptions() {
                 </div>
 
                 {/* Pagination */}
-                {totalPages > 1 && (
-                    <div className="px-6 py-4 bg-gray-50/50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                        <div className="text-xs text-gray-500">
-                            Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> – <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filtered.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{filtered.length}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)} className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition">
+                <div className="px-6 py-4 bg-gray-50/50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-wrap items-center justify-between gap-3">
+                    {/* Left: showing info + page size selector */}
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                        <span>
+                            Showing <span className="font-bold text-gray-900 dark:text-white">{Math.min((currentPage - 1) * itemsPerPage + 1, filtered.length)}</span>
+                            {' '}–{' '}
+                            <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filtered.length)}</span>
+                            {' '}of{' '}
+                            <span className="font-bold text-gray-900 dark:text-white">{filtered.length}</span>
+                        </span>
+                        <span className="text-gray-300 dark:text-gray-600">|</span>
+                        <label className="flex items-center gap-1.5">
+                            <span>Rows:</span>
+                            <select
+                                value={itemsPerPage}
+                                onChange={e => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
+                                className="border border-gray-300 dark:border-gray-600 rounded px-2 py-0.5 text-xs bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 outline-none focus:ring-1 focus:ring-blue-500"
+                            >
+                                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                            </select>
+                        </label>
+                    </div>
+
+                    {/* Right: smart paginator */}
+                    {totalPages > 1 && (
+                        <div className="flex items-center gap-1">
+                            {/* Prev */}
+                            <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}
+                                className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition">
                                 <ChevronLeft className="w-4 h-4" />
                             </button>
-                            {[...Array(totalPages)].map((_, i) => (
-                                <button key={i} onClick={() => setCurrentPage(i + 1)}
-                                    className={`w-8 h-8 rounded-lg text-xs font-bold transition ${currentPage === i + 1 ? 'bg-blue-600 text-white' : 'border border-gray-300 dark:border-gray-600 hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
-                                    {i + 1}
-                                </button>
-                            ))}
-                            <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)} className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition">
+
+                            {/* Smart page buttons */}
+                            {(() => {
+                                const pages: (number | '...')[] = [];
+                                if (totalPages <= 7) {
+                                    for (let i = 1; i <= totalPages; i++) pages.push(i);
+                                } else {
+                                    pages.push(1);
+                                    if (currentPage > 4) pages.push('...');
+                                    for (let i = Math.max(2, currentPage - 2); i <= Math.min(totalPages - 1, currentPage + 2); i++) pages.push(i);
+                                    if (currentPage < totalPages - 3) pages.push('...');
+                                    pages.push(totalPages);
+                                }
+                                return pages.map((p, idx) =>
+                                    p === '...' ? (
+                                        <span key={`dots-${idx}`} className="px-2 text-gray-400 text-xs">…</span>
+                                    ) : (
+                                        <button key={p} onClick={() => setCurrentPage(p as number)}
+                                            className={`w-8 h-8 rounded-lg text-xs font-bold transition ${
+                                                currentPage === p
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'border border-gray-300 dark:border-gray-600 hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                                            }`}>{p}</button>
+                                    )
+                                );
+                            })()}
+
+                            {/* Next */}
+                            <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}
+                                className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition">
                                 <ChevronRight className="w-4 h-4" />
                             </button>
                         </div>
-                    </div>
-                )}
+                    )}
+                </div>
             </div>
 
-            {viewMode === 'detailed' && showViewModal && branch && (
-                <div className="fixed inset-0 z-[100] bg-gray-100 dark:bg-gray-900 overflow-y-auto">
-                    <PrescriptionPrintView
-                        prescription={{
-                            id: showViewModal.id,
-                            created_at: showViewModal.prescription_date, // or use created_at if available
-                            patient: showViewModal.patient as any,
-                            doctor: showViewModal.doctor as any,
-                            items: (showViewModal.prescription_items || []).map(i => ({
-                                id: i.id,
-                                medicine_name: i.medicine?.name || 'Unknown Medicine',
-                                dosage: i.medicine?.dosage || '',
-                                frequency: '', // Could be derived from advice or frequencies if mapped
-                                duration: `${i.period} ${i.time_unit}`,
-                                instructions: i.advice
-                            }))
-                        }}
-                        branch={branch}
-                        onBack={() => setViewMode('table')}
-                        onEdit={() => {
-                            setEditingRx(showViewModal);
-                            setForm({
-                                prescription_date: showViewModal.prescription_date,
-                                patient_id: showViewModal.patient_id,
-                                doctor_id: showViewModal.doctor_id,
-                                notes: showViewModal.notes,
-                                status: showViewModal.status
-                            });
-                            setItems((showViewModal.prescription_items || []).map(pi => ({
-                                id: pi.id,
-                                medicine_id: (pi as any).medicine_id || '', // Need to ensure medicine_id is fetched
-                                period: pi.period,
-                                time_unit: pi.time_unit,
-                                advice: pi.advice
-                            })));
-                            setShowModal(true);
-                            setViewMode('table');
-                        }}
-                        onAddNew={() => {
-                            resetForm();
-                            setShowModal(true);
-                            setViewMode('table');
-                        }}
-                        onSendEmail={() => alert('Email functionality coming soon')}
-                    />
-                </div>
-            )}
+
 
             {/* ─── Add/Edit Prescription Modal ─── */}
             {showModal && (

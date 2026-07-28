@@ -30,16 +30,16 @@ export function SurgicalProcedures() {
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 10;
 
-    useEffect(() => { loadData(); }, [profile?.branch_id]);
+    useEffect(() => { loadData(); }, [profile?.id]);
 
     async function loadData() {
-        if (!profile?.branch_id) return;
         setLoading(true);
-        const { data } = await supabase
-            .from('surgical_procedures')
-            .select('*')
-            .eq('branch_id', profile.branch_id)
-            .order('name');
+        const bid = profile?.branch_id;
+        let query = supabase.from('surgical_procedures').select('*');
+        if (bid) {
+            query = query.eq('branch_id', bid);
+        }
+        const { data } = await query.order('name');
         setDataList(data || []);
         setLoading(false);
     }
@@ -60,7 +60,6 @@ export function SurgicalProcedures() {
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         setError(null);
 
@@ -68,7 +67,7 @@ export function SurgicalProcedures() {
         if (editing) {
             res = await supabase.from('surgical_procedures').update(form).eq('id', editing.id);
         } else {
-            res = await supabase.from('surgical_procedures').insert([{ ...form, branch_id: profile.branch_id }]);
+            res = await supabase.from('surgical_procedures').insert([{ ...form, branch_id: profile?.branch_id || null }]);
         }
 
         if (res.error) {
@@ -119,9 +118,9 @@ export function SurgicalProcedures() {
 
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm clinical-table border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">#</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Procedure Name</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Description</th>

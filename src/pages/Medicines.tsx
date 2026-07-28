@@ -105,14 +105,22 @@ export function Medicines() {
 
     useEffect(() => {
         loadData();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadData() {
-        if (!profile?.branch_id) return;
         setLoading(true);
+        const bid = profile?.branch_id;
+        let medsQ = supabase.from('medicines').select('*, frequency:medicine_frequencies(name)');
+        let freqQ = supabase.from('medicine_frequencies').select('id, name');
+
+        if (bid) {
+            medsQ = medsQ.eq('branch_id', bid);
+            freqQ = freqQ.or(`branch_id.eq.${bid},branch_id.is.null`);
+        }
+
         const [medsRes, freqRes] = await Promise.all([
-            supabase.from('medicines').select('*, frequency:medicine_frequencies(name)').eq('branch_id', profile.branch_id).order('name', { ascending: true }),
-            supabase.from('medicine_frequencies').select('id, name').or(`branch_id.eq.${profile.branch_id},branch_id.is.null`).order('name', { ascending: true })
+            medsQ.order('name', { ascending: true }),
+            freqQ.order('name', { ascending: true })
         ]);
 
         if (!medsRes.error) setMedicines(medsRes.data || []);
@@ -122,13 +130,12 @@ export function Medicines() {
 
     async function handleAddFrequency(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         setError(null);
 
         const { data, error } = await supabase
             .from('medicine_frequencies')
-            .insert([{ ...newFreq, branch_id: profile.branch_id }])
+            .insert([{ ...newFreq, branch_id: profile?.branch_id || null }])
             .select()
             .single();
 
@@ -146,10 +153,9 @@ export function Medicines() {
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         setError(null);
-        const payload = { ...formData, branch_id: profile.branch_id, frequency_id: formData.frequency_id || null };
+        const payload = { ...formData, branch_id: profile?.branch_id || null, frequency_id: formData.frequency_id || null };
 
         let res;
         if (editingMed) {
@@ -213,9 +219,9 @@ export function Medicines() {
 
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase tracking-wider">
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Id</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Medicine Name</th>
                                 <th className="px-6 py-4 text-left font-bold border-b border-gray-200 dark:border-gray-700">Dosage</th>

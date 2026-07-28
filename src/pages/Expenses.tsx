@@ -5,6 +5,8 @@ import { Plus, Search, DollarSign, ChevronLeft, ChevronRight, FileSpreadsheet, F
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 import { logActivity } from '../utils/auditLogger';
 import { SearchDropdown } from '../components/SearchDropdown';
+import { accountingSync } from '../utils/accountingSync';
+
 
 interface Expense {
     id: string;
@@ -65,12 +67,12 @@ export function Expenses() {
     useEffect(() => {
         loadExpenses();
         loadCategories();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadExpenses() {
-        if (!profile?.branch_id) return;
         setLoading(true);
         try {
+            const bid = profile?.branch_id;
             let query = supabase
                 .from('expenses')
                 .select(`
@@ -80,8 +82,8 @@ export function Expenses() {
                 `)
                 .order('expense_date', { ascending: false });
 
-            if (profile.role !== 'super_admin') {
-                query = query.eq('branch_id', profile.branch_id);
+            if (bid) {
+                query = query.eq('branch_id', bid);
             }
 
             const { data, error } = await query;
@@ -95,15 +97,15 @@ export function Expenses() {
     }
 
     async function loadCategories() {
-        if (!profile?.branch_id) return;
         try {
+            const bid = profile?.branch_id;
             let query = supabase
                 .from('expense_categories')
                 .select('id, name')
                 .order('name', { ascending: true });
 
-            if (profile.role !== 'super_admin') {
-                query = query.eq('branch_id', profile.branch_id);
+            if (bid) {
+                query = query.eq('branch_id', bid);
             }
 
             const { data, error } = await query;
@@ -116,7 +118,6 @@ export function Expenses() {
 
     async function handleRecordExpense(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id || !profile?.id) return;
         setSubmitting(true);
         setError(null);
 
@@ -127,21 +128,31 @@ export function Expenses() {
             const { data, error } = await supabase.from('expenses').insert([{
                 ...formData,
                 amount,
-                branch_id: profile.branch_id,
-                recorded_by: profile.id
+                branch_id: profile?.branch_id || null,
+                recorded_by: profile?.id
             }]).select().single();
 
             if (error) throw error;
 
-            await logActivity(supabase, {
-                userId: profile.id,
-                branchId: profile.branch_id,
-                action: 'CREATE',
-                tableName: 'expenses',
-                recordId: data.id,
-                details: `Recorded expense: ${formData.description} ($${amount})`,
-                newValues: { ...formData, amount }
-            });
+            const category = categories.find(c => c.id === formData.category_id);
+            if (data) {
+                await accountingSync.postExpenseJournalEntry({
+                    ...data,
+                    category: category ? { name: category.name } : 'Expense'
+                });
+            }
+
+            if (profile?.id) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id || '',
+                    action: 'CREATE',
+                    tableName: 'expenses',
+                    recordId: data.id,
+                    details: `Recorded expense: ${formData.description} ($${amount})`,
+                    newValues: { ...formData, amount }
+                });
+            }
 
             setShowRecordModal(false);
             resetForm();
@@ -155,12 +166,11 @@ export function Expenses() {
 
     async function handleQuickCatSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         try {
             const { data, error } = await supabase.from('expense_categories').insert([{
                 ...quickCatData,
-                branch_id: profile.branch_id
+                branch_id: profile?.branch_id || null
             }]).select().single();
 
             if (error) throw error;
@@ -191,6 +201,7 @@ export function Expenses() {
         try {
             const { error } = await supabase.from('expenses').delete().eq('id', id);
             if (error) throw error;
+            await accountingSync.deleteJournalEntry('expense', id, profile?.branch_id || '');
             loadExpenses();
         } catch (err: any) {
             alert('Error deleting: ' + err.message);
@@ -304,7 +315,7 @@ export function Expenses() {
                             ) : paginated.length === 0 ? (
                                 <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-500">No records found matching your filters</td></tr>
                             ) : paginated.map(e => (
-                                <tr key={e.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors">
+                                <tr key={e.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/30 transition-colors">
                                     <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">{new Date(e.expense_date).toLocaleDateString()}</td>
                                     <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">
                                         <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs font-semibold text-gray-600 dark:text-gray-400">{e.category?.name || 'Uncategorized'}</span>

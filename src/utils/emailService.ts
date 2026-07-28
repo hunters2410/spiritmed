@@ -3,9 +3,10 @@ import { supabase } from '../lib/supabase';
 interface EmailOptions {
     recipientEmail: string;
     recipientName?: string;
-    subject: string;
-    body: string;
+    subject?: string;
+    body?: string;
     templateId?: string;
+    triggerType?: string;
     placeholders?: Record<string, string>;
     branchId: string;
     senderId?: string;
@@ -22,16 +23,23 @@ interface EmailOptions {
 export const emailService = {
     async sendEmail(options: EmailOptions) {
         try {
-            let finalBody = options.body;
-            let finalSubject = options.subject;
+            let finalBody = options.body || '';
+            let finalSubject = options.subject || '';
 
             // 1. Resolve Template if provided
-            if (options.templateId) {
-                const { data: template } = await supabase
-                    .from('email_templates')
-                    .select('*')
-                    .eq('id', options.templateId)
-                    .single();
+            if (options.templateId || options.triggerType) {
+                let query = supabase.from('email_templates').select('*');
+                
+                if (options.templateId) {
+                    query = query.eq('id', options.templateId);
+                } else {
+                    query = query
+                        .eq('branch_id', options.branchId)
+                        .eq('trigger_type', options.triggerType)
+                        .eq('is_active', true);
+                }
+
+                const { data: template } = await query.maybeSingle();
                 
                 if (template) {
                     finalBody = template.body;
@@ -39,12 +47,19 @@ export const emailService = {
                 }
             }
 
+            if (!finalBody || !finalSubject) {
+                throw new Error('Email body and subject are required (could not resolve from template or options)');
+            }
+
             // 2. Replace placeholders in body and subject
             if (options.placeholders) {
                 Object.entries(options.placeholders).forEach(([key, value]) => {
-                    const regex = new RegExp(`{{${key}}}`, 'g');
-                    finalBody = finalBody.replace(regex, value || '');
-                    finalSubject = finalSubject.replace(regex, value || '');
+                    // Support both {key} and {{key}}
+                    const regexDouble = new RegExp(`{{${key}}}`, 'g');
+                    const regexSingle = new RegExp(`{${key}}`, 'g');
+                    
+                    finalBody = finalBody.replace(regexDouble, value || '').replace(regexSingle, value || '');
+                    finalSubject = finalSubject.replace(regexDouble, value || '').replace(regexSingle, value || '');
                 });
             }
 

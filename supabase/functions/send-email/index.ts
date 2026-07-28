@@ -49,6 +49,7 @@ serve(async (req) => {
     const { data: config, error: configError } = await supabaseClient
       .from('system_configurations')
       .select('config_data')
+      .eq('branch_id', log.branch_id)
       .eq('config_type', 'email')
       .eq('config_name', 'smtp')
       .maybeSingle()
@@ -57,21 +58,34 @@ serve(async (req) => {
       throw new Error('SMTP configuration not found in system_configurations')
     }
 
-    const { smtp_host, smtp_port, smtp_user, smtp_password, smtp_encryption, from_email, from_name } = config.config_data
+    const { 
+      smtp_host, 
+      smtp_port, 
+      smtp_user, 
+      smtp_username, 
+      smtp_password, 
+      smtp_encryption, 
+      encryption,
+      from_email, 
+      from_name 
+    } = config.config_data
+
+    const username = smtp_user || smtp_username
+    const encType = smtp_encryption || encryption
 
     // 3. Connect to SMTP Server with 15s timeout
     const client = new SmtpClient()
     
     try {
-      console.log(`Connecting to SMTP: ${smtp_host}:${smtp_port} (TLS: ${smtp_encryption !== 'none'})`)
+      console.log(`Connecting to SMTP: ${smtp_host}:${smtp_port} (TLS: ${encType !== 'none'})`)
       
       // We wrap the connect in a timeout to prevent hanging
       const connectPromise = client.connect({
         hostname: smtp_host,
         port: parseInt(smtp_port),
-        username: smtp_user,
+        username: username,
         password: smtp_password,
-        tls: smtp_encryption === 'ssl' || smtp_encryption === 'tls',
+        tls: encType === 'ssl' || encType === 'tls',
       })
 
       const timeoutPromise = new Promise((_, reject) => 

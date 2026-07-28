@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Calendar as CalendarIcon, Clock, User, Edit, Check, Filter, Search } from 'lucide-react';
+import { Plus, Calendar as CalendarIcon, Clock, User, Edit, Check, Filter, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
 import { emailService } from '../utils/emailService';
 import { SearchDropdown } from '../components/SearchDropdown';
+import { notificationService } from '../utils/notificationService';
+import { smsService } from '../utils/smsService';
 
 interface Appointment {
   id: string;
@@ -14,8 +16,9 @@ interface Appointment {
   status: string;
   notes: string;
   cancellation_reason?: string;
-  doctor_id: string; // Add doctor_id for editing
+  doctor_id: string; 
   patient_id: string;
+  branch_id?: string;
   patients: {
     full_name: string;
     phone: string;
@@ -43,17 +46,67 @@ export function Appointments() {
   const [formData, setFormData] = useState({
     patient_id: '',
     doctor_id: '',
-    appointment_date: new Date().toISOString().split('T')[0], // Use just date part for slot selection
+    appointment_date: new Date().toISOString().split('T')[0], 
+    appointment_time: '',
     duration_minutes: 30,
     appointment_type: 'consultation',
     notes: '',
     status: 'pending_confirmation',
     cancellation_reason: ''
   });
+
+  const openCreateModal = () => {
+    setFormData({
+      patient_id: '',
+      doctor_id: '',
+      appointment_date: new Date().toISOString().split('T')[0],
+      appointment_time: '',
+      duration_minutes: 30,
+      appointment_type: 'consultation',
+      notes: '',
+      status: 'pending_confirmation',
+      cancellation_reason: ''
+    });
+    setSelectedSlotId('');
+    setIsEditing(false);
+    setEditingId(null);
+    setShowModal(true);
+  };
+
+  const getLocalDateTimeComponents = (dateString: string) => {
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) {
+      return { dateStr: '', timeStr: '' };
+    }
+    const dateStr = [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0')
+    ].join('-');
+    
+    const timeStr = [
+      String(d.getHours()).padStart(2, '0'),
+      String(d.getMinutes()).padStart(2, '0')
+    ].join(':');
+
+    return { dateStr, timeStr };
+  };
+
+  const handleSelectSlot = (slot: any) => {
+    setSelectedSlotId(slot.id);
+    const { dateStr, timeStr } = getLocalDateTimeComponents(slot.start_time);
+    const duration = Math.round((new Date(slot.end_time).getTime() - new Date(slot.start_time).getTime()) / 60000) || formData.duration_minutes;
+    setFormData(prev => ({
+      ...prev,
+      appointment_date: dateStr,
+      appointment_time: timeStr,
+      duration_minutes: duration
+    }));
+  };
+
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [availableSlots, setAvailableSlots] = useState<any[]>([]);
-  const [slotLoading, setSlotLoading] = useState(false);
   const [selectedSlotId, setSelectedSlotId] = useState('');
   const [newPatient, setNewPatient] = useState({
     full_name: '',
@@ -65,9 +118,118 @@ export function Appointments() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [slotSearchQuery, setSlotSearchQuery] = useState('');
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 15;
+  const [datePreset, setDatePreset] = useState('custom');
+  const [editingCell, setEditingCell] = useState<{ id: string; type: 'date' | 'time' } | null>(null);
+  const [tempValue, setTempValue] = useState('');
+
+  const handleDatePresetChange = (preset: string) => {
+    setDatePreset(preset);
+    const localToday = new Date();
+    
+    const getLocalDateStr = (d: Date) => {
+      return [
+        d.getFullYear(),
+        String(d.getMonth() + 1).padStart(2, '0'),
+        String(d.getDate()).padStart(2, '0')
+      ].join('-');
+    };
+
+    if (preset === 'today') {
+      const dateStr = getLocalDateStr(localToday);
+      setDateRange({ startDate: dateStr, endDate: dateStr });
+    } else if (preset === 'tomorrow') {
+      const tom = new Date(localToday);
+      tom.setDate(tom.getDate() + 1);
+      const dateStr = getLocalDateStr(tom);
+      setDateRange({ startDate: dateStr, endDate: dateStr });
+    } else if (preset === 'yesterday') {
+      const yes = new Date(localToday);
+      yes.setDate(yes.getDate() - 1);
+      const dateStr = getLocalDateStr(yes);
+      setDateRange({ startDate: dateStr, endDate: dateStr });
+    } else {
+      setDateRange({ startDate: '', endDate: '' });
+    }
+  };
+
+  const handleStatusChange = (appointmentId: string, newStatus: string) => {
+    if (newStatus === 'cancelled') {
+      setCancellingAppointmentId(appointmentId);
+      setShowCancelModal(true);
+    } else {
+      updateStatus(appointmentId, newStatus);
+    }
+  };
+
+  const saveInlineDate = async (id: string) => {
+    setEditingCell(null);
+    const appointment = appointments.find(a => a.id === id);
+    if (!appointment) return;
+    
+    const { timeStr } = getLocalDateTimeComponents(appointment.appointment_date);
+    const newDateTime = `${tempValue}T${timeStr || '09:00'}:00`;
+
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ appointment_date: newDateTime })
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      setAppointments(prev => prev.map(a => a.id === id ? { ...a, appointment_date: newDateTime } : a));
+    } catch (err) {
+      console.error('Error saving inline date:', err);
+      alert('Failed to update date');
+    }
+  };
+
+  const saveInlineTime = async (id: string) => {
+    setEditingCell(null);
+    const appointment = appointments.find(a => a.id === id);
+    if (!appointment) return;
+    
+    const { dateStr } = getLocalDateTimeComponents(appointment.appointment_date);
+    const newDateTime = `${dateStr || new Date().toISOString().split('T')[0]}T${tempValue}:00`;
+
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ appointment_date: newDateTime })
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      setAppointments(prev => prev.map(a => a.id === id ? { ...a, appointment_date: newDateTime } : a));
+    } catch (err) {
+      console.error('Error saving inline time:', err);
+      alert('Failed to update time');
+    }
+  };
+
+  const updateAppointmentType = async (id: string, type: string) => {
+    try {
+      const { error } = await supabase
+        .from('appointments')
+        .update({ appointment_type: type })
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      setAppointments(prev => prev.map(a => a.id === id ? { ...a, appointment_type: type } : a));
+    } catch (err) {
+      console.error('Error saving inline appointment type:', err);
+      alert('Failed to update appointment type');
+    }
+  };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, dateRange, statusFilter, typeFilter]);
 
   useEffect(() => {
     loadAppointments();
@@ -81,10 +243,37 @@ export function Appointments() {
     }
   }, [formData.doctor_id, formData.appointment_date]);
 
+  useEffect(() => {
+    if (formData.doctor_id) {
+      fetchDoctorDuration(formData.doctor_id);
+    }
+  }, [formData.doctor_id]);
+
+  const fetchDoctorDuration = async (doctorId: string) => {
+    if (!doctorId) return;
+    try {
+      const { data, error } = await supabase
+        .from('doctor_availability')
+        .select('slot_duration')
+        .eq('doctor_id', doctorId)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data && data.slot_duration) {
+        setFormData(prev => ({ ...prev, duration_minutes: data.slot_duration }));
+      } else {
+        setFormData(prev => ({ ...prev, duration_minutes: 30 }));
+      }
+    } catch (error) {
+      console.error('Error fetching doctor slot duration:', error);
+    }
+  };
+
   const loadAvailableSlots = async (doctorId: string, date: string) => {
     try {
-      setSlotLoading(true);
-      setSelectedSlotId(''); // Reset selection
+      setSelectedSlotId(''); 
 
       const { data, error } = await supabase
         .from('appointment_slots')
@@ -97,8 +286,6 @@ export function Appointments() {
       setAvailableSlots(data || []);
     } catch (error) {
       console.error('Error loading available slots:', error);
-    } finally {
-      setSlotLoading(false);
     }
   };
 
@@ -107,46 +294,56 @@ export function Appointments() {
 
     try {
       setLoading(true);
-      let query = supabase
-        .from('appointments')
-        .select(`
-          *,
-          doctor_id,
-          patients (full_name, phone),
-          users:doctor_id (full_name)
-        `)
-        .order('appointment_date', { ascending: true });
+      let allAppointments: any[] = [];
+      let from = 0;
+      const pageSize = 1000;
 
-      if (profile.role !== 'super_admin') {
-        query = query.eq('branch_id', profile.branch_id);
+      while (true) {
+        let query = supabase
+          .from('appointments')
+          .select(`
+            *,
+            doctor_id,
+            patients (full_name, phone),
+            users:doctor_id (full_name)
+          `)
+          .order('appointment_date', { ascending: false })
+          .range(from, from + pageSize - 1);
+
+        if (profile.role !== 'super_admin') {
+          query = query.eq('branch_id', profile.branch_id);
+        }
+
+        if (profile.role === 'doctor') {
+          query = query.eq('doctor_id', profile.id);
+        }
+
+        if (dateRange.startDate) {
+          query = query.gte('appointment_date', dateRange.startDate);
+        }
+
+        if (dateRange.endDate) {
+          const endDateObj = new Date(dateRange.endDate);
+          endDateObj.setDate(endDateObj.getDate() + 1);
+          query = query.lt('appointment_date', endDateObj.toISOString().split('T')[0]);
+        }
+
+        if (statusFilter !== 'all') {
+          query = query.eq('status', statusFilter);
+        }
+
+        if (typeFilter !== 'all') {
+          query = query.eq('appointment_type', typeFilter);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allAppointments = allAppointments.concat(data);
+        if (data.length < pageSize) break;
+        from += pageSize;
       }
-
-      if (profile.role === 'doctor') {
-        query = query.eq('doctor_id', profile.id);
-      }
-
-      if (dateRange.startDate) {
-        query = query.gte('appointment_date', dateRange.startDate);
-      }
-
-      if (dateRange.endDate) {
-        const endDateObj = new Date(dateRange.endDate);
-        endDateObj.setDate(endDateObj.getDate() + 1);
-        query = query.lt('appointment_date', endDateObj.toISOString().split('T')[0]);
-      }
-
-      if (statusFilter !== 'all') {
-        query = query.eq('status', statusFilter);
-      }
-
-      if (typeFilter !== 'all') {
-        query = query.eq('appointment_type', typeFilter);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
-      setAppointments(data || []);
+      setAppointments(allAppointments);
     } catch (error) {
       console.error('Error loading appointments:', error);
     } finally {
@@ -155,14 +352,35 @@ export function Appointments() {
   };
 
   const loadPatients = async () => {
-    if (!profile?.branch_id) return;
-    const { data } = await supabase
-      .from('patients')
-      .select('id, full_name, patient_number, email')
-      .eq('branch_id', profile.branch_id)
-      .eq('status', 'active')
-      .order('full_name');
-    setPatients(data || []);
+    if (!profile) return;
+    try {
+      let allPatients: any[] = [];
+      let from = 0;
+      const pageSize = 1000;
+
+      while (true) {
+        let query = supabase
+          .from('patients')
+          .select('id, full_name, patient_number, email')
+          .eq('status', 'active')
+          .order('full_name')
+          .range(from, from + pageSize - 1);
+
+        if (profile.role !== 'super_admin' && profile.branch_id) {
+          query = query.eq('branch_id', profile.branch_id);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allPatients = allPatients.concat(data);
+        if (data.length < pageSize) break;
+        from += pageSize;
+      }
+      setPatients(allPatients);
+    } catch (err) {
+      console.error('Error loading all patients:', err);
+    }
   };
 
   const generatePatientNumber = () => {
@@ -176,8 +394,6 @@ export function Appointments() {
     try {
       setLoading(true);
       const patientNumber = generatePatientNumber();
-
-      // Auto-generate email if not provided
       const email = newPatient.email || `${newPatient.full_name.toLowerCase().replace(/\s+/g, '.')}@spiritmed.placeholder`;
 
       const { data, error } = await supabase
@@ -194,40 +410,39 @@ export function Appointments() {
       if (error) throw error;
 
         if (data && data[0]) {
-            if (profile?.id && profile?.branch_id) {
-                await logActivity(supabase, {
-                    userId: profile.id,
-                    branchId: profile.branch_id,
-                    action: 'CREATE',
-                    tableName: 'patients',
-                    recordId: data[0].id,
-                    details: `Quick-added patient from appointments: ${newPatient.full_name}`,
-                    newValues: { ...newPatient, patient_number: patientNumber }
-                });
-            }
-            const createdPatient = data[0];
-            setPatients([...patients, createdPatient]);
-            // ... (rest of logic)
-        setFormData({
-          patient_id: createdPatient.id,
-          doctor_id: '',
-          appointment_date: new Date().toISOString().split('T')[0],
-          duration_minutes: 30,
-          appointment_type: 'consultation',
-          notes: '',
-          status: 'pending_confirmation',
-          cancellation_reason: ''
-        });
-        setShowPatientModal(false);
-        setNewPatient({
-          full_name: '',
-          phone: '',
-          gender: 'male',
-          date_of_birth: '',
-          email: ''
-        });
-        alert('Patient created successfully!');
-      }
+          if (profile?.id && profile?.branch_id) {
+            await logActivity(supabase, {
+              userId: profile.id,
+              branchId: profile.branch_id,
+              action: 'CREATE',
+              tableName: 'patients',
+              recordId: data[0].id,
+              details: `Quick-added patient from appointments: ${newPatient.full_name}`,
+              newValues: { ...newPatient, patient_number: patientNumber }
+            });
+          }
+          const createdPatient = data[0];
+          // Only add the fields the dropdown needs — avoids raw DB row dumps in the list
+          setPatients([...patients, {
+            id: createdPatient.id,
+            full_name: createdPatient.full_name,
+            patient_number: createdPatient.patient_number,
+            email: createdPatient.email
+          }]);
+          setFormData({
+            ...formData,
+            patient_id: createdPatient.id
+          });
+          setShowPatientModal(false);
+          setNewPatient({
+            full_name: '',
+            phone: '',
+            gender: 'male',
+            date_of_birth: '',
+            email: ''
+          });
+          alert('Patient created successfully!');
+        }
     } catch (error) {
       console.error('Error creating patient:', error);
       alert('Failed to create patient');
@@ -257,6 +472,7 @@ export function Appointments() {
           patient_id: '',
           doctor_id: '',
           appointment_date: new Date().toISOString().split('T')[0],
+          appointment_time: '',
           duration_minutes: 30,
           appointment_type: 'consultation',
           notes: '',
@@ -268,10 +484,29 @@ export function Appointments() {
         setEditingId(null);
       };
 
-      if (isEditing && editingId) {
-        // UPDATE Logic
-        const oldAppointment = appointments.find(a => a.id === editingId);
+      let finalDateTime = '';
+      let finalDuration = formData.duration_minutes;
 
+      if (selectedSlotId) {
+        const selectedSlot = availableSlots.find(s => s.id === selectedSlotId);
+        if (selectedSlot) {
+          finalDateTime = selectedSlot.start_time;
+          finalDuration = selectedSlot.slot_duration || formData.duration_minutes;
+        }
+      }
+
+      if (!finalDateTime) {
+        if (formData.appointment_date && formData.appointment_time) {
+          finalDateTime = `${formData.appointment_date}T${formData.appointment_time}:00`;
+        } else {
+          alert('Please select an available time slot or enter date and time.');
+          setLoading(false);
+          return;
+        }
+      }
+
+      if (isEditing && editingId) {
+        const oldAppointment = appointments.find(a => a.id === editingId);
         const { error: updateError } = await supabase
           .from('appointments')
           .update({
@@ -280,51 +515,55 @@ export function Appointments() {
             appointment_type: formData.appointment_type,
             notes: formData.notes,
             status: formData.status,
-            ...(formData.status === 'cancelled' ? { cancellation_reason: formData.cancellation_reason || (oldAppointment as any)?.cancellation_reason || 'Manually Cancelled' } : {}),
-            // Only update date if a new slot was selected
-            ...(selectedSlotId ? { appointment_date: availableSlots.find(s => s.id === selectedSlotId)?.start_time } : {})
+            duration_minutes: finalDuration,
+            appointment_date: finalDateTime,
+            ...(formData.status === 'cancelled' ? { cancellation_reason: formData.cancellation_reason || (oldAppointment as any)?.cancellation_reason || 'Manually Cancelled' } : {})
           })
           .eq('id', editingId);
 
         if (updateError) throw updateError;
 
         if (profile?.id && profile?.branch_id) {
-            const patientName = patients.find(p => p.id === formData.patient_id)?.full_name || formData.patient_id;
-            await logActivity(supabase, {
-                userId: profile.id,
-                branchId: profile.branch_id,
-                action: 'UPDATE',
-                tableName: 'appointments',
-                recordId: editingId,
-                details: `Updated appointment details for patient: ${patientName}`,
-                newValues: formData
+          const patientName = patients.find(p => p.id === formData.patient_id)?.full_name || 'Patient';
+          await logActivity(supabase, {
+            userId: profile.id,
+            branchId: profile.branch_id,
+            action: 'UPDATE',
+            tableName: 'appointments',
+            recordId: editingId,
+            details: `Updated appointment details for patient: ${patientName}`,
+            newValues: formData
+          });
+
+          if (formData.doctor_id) {
+            await notificationService.send({
+              userId: formData.doctor_id,
+              title: 'Appointment Updated',
+              message: `Appointment for ${patientName} has been updated.`,
+              type: 'info',
+              link: '/appointments',
+              branchId: profile.branch_id
             });
+          }
         }
 
-        // Trigger notification if status changed to confirmed/cancelled
         if (oldAppointment && oldAppointment.status !== formData.status && (formData.status === 'confirmed' || formData.status === 'cancelled')) {
-          sendNotification(formData.status as any, { ...oldAppointment, status: formData.status, cancellation_reason: formData.cancellation_reason });
+          sendExternalNotification(formData.status as any, { ...oldAppointment, status: formData.status, cancellation_reason: formData.cancellation_reason });
         }
 
         setSuccessMessage('Appointment updated successfully!');
         setShowSuccessModal(true);
       } else {
-        // CREATE Logic
-        if (!selectedSlotId) {
-          alert('Please select an available time slot');
-          setLoading(false);
-          return;
-        }
-
-        const selectedSlot = availableSlots.find(s => s.id === selectedSlotId);
-        if (!selectedSlot) throw new Error('Selected slot not found');
-
         const { data: appointmentData, error: appointmentError } = await supabase
           .from('appointments')
           .insert([{
-            ...formData,
-            appointment_date: selectedSlot.start_time,
-            duration_minutes: selectedSlot.slot_duration || formData.duration_minutes,
+            patient_id: formData.patient_id,
+            doctor_id: formData.doctor_id,
+            appointment_type: formData.appointment_type,
+            notes: formData.notes,
+            status: formData.status,
+            duration_minutes: finalDuration,
+            appointment_date: finalDateTime,
             branch_id: profile?.branch_id,
             created_by: profile?.id
           }])
@@ -333,55 +572,78 @@ export function Appointments() {
 
         if (appointmentError) throw appointmentError;
 
-        const { error: slotError } = await supabase
-          .from('appointment_slots')
-          .update({
-            is_booked: true,
-            appointment_id: appointmentData.id
-          })
-          .eq('id', selectedSlotId);
-
-        if (slotError) console.error('Error updating slot:', slotError);
+        if (selectedSlotId) {
+          await supabase
+            .from('appointment_slots')
+            .update({ is_booked: true, appointment_id: appointmentData.id })
+            .eq('id', selectedSlotId);
+        }
 
         if (profile?.id && profile?.branch_id && appointmentData) {
-            const patient = patients.find(p => p.id === formData.patient_id);
-            const patientName = patient?.full_name || formData.patient_id;
-            
-            await logActivity(supabase, {
-                userId: profile.id,
-                branchId: profile.branch_id,
-                action: 'CREATE',
-                tableName: 'appointments',
-                recordId: appointmentData.id,
-                details: `Scheduled new ${formData.appointment_type} appointment for patient: ${patientName}`,
-                newValues: formData
+          const patient = patients.find(p => p.id === formData.patient_id);
+          const patientName = patient?.full_name || 'Patient';
+          
+          await logActivity(supabase, {
+            userId: profile.id,
+            branchId: profile.branch_id,
+            action: 'CREATE',
+            tableName: 'appointments',
+            recordId: appointmentData.id,
+            details: `Scheduled new ${formData.appointment_type} appointment for patient: ${patientName}`,
+            newValues: formData
+          });
+
+          if (formData.doctor_id) {
+            await notificationService.send({
+              userId: formData.doctor_id,
+              title: 'New Appointment',
+              message: `You have a new appointment with ${patientName} on ${new Date(finalDateTime).toLocaleString()}.`,
+              type: 'success',
+              link: '/appointments',
+              branchId: profile.branch_id
             });
+          }
 
-            // Trigger Email Notification
-            if (patient?.email) {
-                const { data: template } = await supabase
-                    .from('email_templates')
-                    .select('id')
-                    .eq('name', 'Appointment Confirmation')
-                    .maybeSingle();
+          if (patient?.email) {
+            const { data: template } = await supabase
+              .from('email_templates')
+              .select('id')
+              .eq('name', 'Appointment Confirmation')
+              .maybeSingle();
 
-                await emailService.sendEmail({
-                    recipientEmail: patient.email,
-                    recipientName: patient.full_name,
-                    subject: 'Appointment scheduled',
-                    body: `Your appointment is confirmed for ${new Date(selectedSlot.start_time).toLocaleString()}`,
-                    templateId: template?.id,
-                    placeholders: {
-                        patient_name: patient.full_name,
-                        date: new Date(selectedSlot.start_time).toLocaleDateString(),
-                        time: new Date(selectedSlot.start_time).toLocaleTimeString()
-                    },
-                    branchId: profile.branch_id,
-                    senderId: profile.id,
-                    referenceId: appointmentData.id,
-                    referenceType: 'appointment'
-                });
-            }
+            await emailService.sendEmail({
+              recipientEmail: patient.email,
+              recipientName: patient.full_name,
+              subject: 'Appointment scheduled',
+              body: `Your appointment is confirmed for ${new Date(finalDateTime).toLocaleString()}`,
+              templateId: template?.id,
+              placeholders: {
+                patient_name: patient.full_name,
+                date: new Date(finalDateTime).toLocaleDateString(),
+                time: new Date(finalDateTime).toLocaleTimeString()
+              },
+              branchId: profile.branch_id,
+              senderId: profile.id,
+              referenceId: appointmentData.id,
+              referenceType: 'appointment'
+            });
+          }
+
+          // SEND SMS: Appointment Booked
+          if (patient?.phone && profile?.branch_id) {
+            await smsService.sendSms({
+              recipientPhone: patient.phone,
+              triggerType: 'appointment_booked',
+              variables: {
+                patient_name: patient.full_name,
+                doctor_name: doctors.find(d => d.id === formData.doctor_id)?.full_name || 'Doctor',
+                date: new Date(finalDateTime).toLocaleDateString(),
+                time: new Date(finalDateTime).toLocaleTimeString()
+              },
+              branchId: profile.branch_id,
+              patientId: patient.id
+            });
+          }
         }
 
         setSuccessMessage('Appointment scheduled successfully!');
@@ -392,20 +654,19 @@ export function Appointments() {
       resetForm();
       loadAppointments();
     } catch (error: any) {
-      console.error('Error creating appointment:', error);
-      alert(error.message || 'Failed to create appointment');
+      console.error('Error handling appointment submission:', error);
+      alert(error.message || 'Failed to handle appointment');
     } finally {
       setLoading(false);
     }
   };
 
-  const sendNotification = (type: 'confirmed' | 'cancelled', appointment: Appointment) => {
+  const sendExternalNotification = (type: 'confirmed' | 'cancelled', appointment: Appointment) => {
     const message = type === 'confirmed'
       ? `Appointment confirmed for ${appointment.patients.full_name} on ${new Date(appointment.appointment_date).toLocaleString()}`
       : `Appointment cancelled for ${appointment.patients.full_name}. Reason: ${appointment.cancellation_reason || 'N/A'}`;
 
-    console.log(`[NOTIFICATION/SMS/EMAIL] Triggered for ${appointment.patients.phone}: ${message}`);
-    // In a real app, this would call an API like Twilio or SendGrid
+    console.log(`[EXTERNAL_NOTIF] Triggered for ${appointment.patients.phone}: ${message}`);
   };
 
   const updateStatus = async (id: string, newStatus: string, reason?: string) => {
@@ -427,21 +688,50 @@ export function Appointments() {
       if (error) throw error;
 
       if (profile?.id && profile?.branch_id) {
-          await logActivity(supabase, {
-              userId: profile.id,
-              branchId: profile.branch_id,
-              action: 'STATUS_CHANGE',
-              tableName: 'appointments',
-              recordId: id,
-              details: `Changed appointment status to ${newStatus.toUpperCase()}${reason ? ` (Reason: ${reason})` : ''}`,
-              newValues: updateData
-          });
+        await logActivity(supabase, {
+          userId: profile.id,
+          branchId: profile.branch_id,
+          action: 'STATUS_CHANGE',
+          tableName: 'appointments',
+          recordId: id,
+          details: `Changed appointment status to ${newStatus.toUpperCase()}${reason ? ` (Reason: ${reason})` : ''}`,
+          newValues: updateData
+        });
       }
 
-      // Find the appointment to send notification
       const appointment = appointments.find(a => a.id === id);
-      if (appointment && (newStatus === 'confirmed' || newStatus === 'cancelled')) {
-        sendNotification(newStatus as any, { ...appointment, cancellation_reason: reason });
+      if (appointment) {
+        if (newStatus === 'confirmed' || newStatus === 'cancelled') {
+          sendExternalNotification(newStatus as any, { ...appointment, cancellation_reason: reason });
+          
+          // SEND SMS: Status Change
+          if (newStatus === 'confirmed' && appointment.patients?.phone && (profile?.branch_id || appointment.branch_id)) {
+            await smsService.sendSms({
+              recipientPhone: appointment.patients.phone,
+              triggerType: 'appointment_confirmed',
+              variables: {
+                patient_name: appointment.patients.full_name,
+                doctor_name: appointment.users?.full_name || 'Doctor',
+                date: new Date(appointment.appointment_date).toLocaleDateString(),
+                time: new Date(appointment.appointment_date).toLocaleTimeString()
+              },
+              branchId: (profile?.branch_id || appointment.branch_id) as string,
+              patientId: appointment.patient_id
+            });
+          }
+        }
+        
+        // Notify doctor of status change
+        if (appointment.doctor_id) {
+          await notificationService.send({
+            userId: appointment.doctor_id,
+            title: 'Appointment Status Updated',
+            message: `Appointment for ${appointment.patients.full_name} is now ${newStatus.replace('_', ' ')}.`,
+            type: newStatus === 'cancelled' ? 'warning' : 'info',
+            link: '/appointments',
+            branchId: profile?.branch_id || appointment.branch_id
+          });
+        }
       }
 
       loadAppointments();
@@ -462,13 +752,16 @@ export function Appointments() {
   };
 
   const openEditModal = (appointment: Appointment) => {
+    const { dateStr, timeStr } = getLocalDateTimeComponents(appointment.appointment_date);
+
     setFormData({
       patient_id: appointment.patient_id,
       doctor_id: (appointment as any).doctor_id || '',
-      appointment_date: appointment.appointment_date.split('T')[0],
+      appointment_date: dateStr,
+      appointment_time: timeStr,
       duration_minutes: appointment.duration_minutes,
       appointment_type: appointment.appointment_type,
-      notes: appointment.notes,
+      notes: appointment.notes || '',
       status: appointment.status,
       cancellation_reason: appointment.cancellation_reason || ''
     });
@@ -479,17 +772,12 @@ export function Appointments() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'confirmed':
-        return 'bg-green-100 text-green-700';
-      case 'pending_confirmation':
-        return 'bg-yellow-100 text-yellow-700';
-      case 'cancelled':
-        return 'bg-red-100 text-red-700';
-      case 'treated':
-      case 'completed':
-        return 'bg-blue-100 text-blue-700';
-      default:
-        return 'bg-gray-100 text-gray-700';
+      case 'confirmed': return 'bg-green-100 text-green-700';
+      case 'pending_confirmation': return 'bg-yellow-100 text-yellow-700';
+      case 'cancelled': return 'bg-red-100 text-red-700';
+      case 'treated': return 'bg-blue-100 text-blue-700';
+      case 'completed': return 'bg-purple-100 text-purple-700';
+      default: return 'bg-gray-100 text-gray-700';
     }
   };
 
@@ -499,6 +787,51 @@ export function Appointments() {
       minute: '2-digit',
       hour12: true
     });
+  };
+
+  const filteredAppointments = appointments.filter(a => {
+    const s = searchQuery.toLowerCase();
+    return a.patients?.full_name?.toLowerCase().includes(s) || 
+           a.users?.full_name?.toLowerCase().includes(s) ||
+           a.notes?.toLowerCase().includes(s);
+  });
+
+  const totalPages = Math.ceil(filteredAppointments.length / itemsPerPage);
+  const paginatedAppointments = filteredAppointments.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      
+      let start = Math.max(2, currentPage - 1);
+      let end = Math.min(totalPages - 1, currentPage + 1);
+      
+      if (currentPage <= 2) {
+        end = 3;
+      }
+      if (currentPage >= totalPages - 1) {
+        start = totalPages - 2;
+      }
+      
+      if (start > 2) {
+        pages.push('...');
+      }
+      
+      for (let i = start; i <= end; i++) {
+        pages.push(i);
+      }
+      
+      if (end < totalPages - 1) {
+        pages.push('...');
+      }
+      
+      pages.push(totalPages);
+    }
+    return pages;
   };
 
   if (loading) {
@@ -511,65 +844,90 @@ export function Appointments() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Appointment Management</h1>
-          <p className="text-gray-600 mt-1">Schedule and manage patient appointments</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+            <CalendarIcon className="w-7 h-7 text-green-600" />
+            Appointment Management
+          </h1>
+          <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-0.5">Schedule and manage patient appointments</p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2 rounded-lg hover:from-green-700 hover:to-emerald-700 transition shadow-md"
+          onClick={openCreateModal}
+          className="flex items-center justify-center space-x-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2.5 rounded-xl hover:from-green-700 hover:to-emerald-700 transition shadow-sm font-bold text-sm shrink-0"
         >
-          <Plus className="w-5 h-5" />
+          <Plus className="w-4 h-4" />
           <span>New Appointment</span>
         </button>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="relative flex-1 min-w-[300px]">
-            <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search by patient name or doctor..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-            />
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-4">
+        {/* Search Bar */}
+        <div className="relative w-full">
+          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Search by patient name or doctor..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+          />
+        </div>
+
+        {/* Filter Controls Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div>
+            <label className="block text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-400 mb-1">Period</label>
+            <select
+              value={datePreset}
+              onChange={(e) => handleDatePresetChange(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
+            >
+              <option value="custom">Custom Range</option>
+              <option value="today">Today</option>
+              <option value="tomorrow">Tomorrow</option>
+              <option value="yesterday">Yesterday</option>
+            </select>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span className="text-sm font-medium text-gray-700">From:</span>
+          <div>
+            <label className="block text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-400 mb-1">From Date</label>
             <div className="relative">
               <input
                 type="date"
                 value={dateRange.startDate}
-                onChange={(e) => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-                className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none text-sm"
+                onChange={(e) => {
+                  setDatePreset('custom');
+                  setDateRange(prev => ({ ...prev, startDate: e.target.value }));
+                }}
+                className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
               />
-              <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <CalendarIcon className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span className="text-sm font-medium text-gray-700">To:</span>
+          <div>
+            <label className="block text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-400 mb-1">To Date</label>
             <div className="relative">
               <input
                 type="date"
                 value={dateRange.endDate}
-                onChange={(e) => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-                className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none text-sm"
+                onChange={(e) => {
+                  setDatePreset('custom');
+                  setDateRange(prev => ({ ...prev, endDate: e.target.value }));
+                }}
+                className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
               />
-              <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <CalendarIcon className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 ml-auto">
-            <Filter className="w-4 h-4 text-gray-400" />
+          <div>
+            <label className="block text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-400 mb-1">Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-sm bg-white"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
             >
               <option value="all">All Statuses</option>
               <option value="pending_confirmation">Pending</option>
@@ -577,10 +935,14 @@ export function Appointments() {
               <option value="treated">Treated</option>
               <option value="cancelled">Cancelled</option>
             </select>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-400 mb-1">Type</label>
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-sm bg-white"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
             >
               <option value="all">All Types</option>
               <option value="consultation">Consultation</option>
@@ -588,10 +950,6 @@ export function Appointments() {
               <option value="emergency">Emergency</option>
               <option value="procedure">Procedure</option>
             </select>
-          </div>
-
-          <div className="flex-1 text-right text-sm text-gray-600">
-            Found {appointments.length} appointments
           </div>
         </div>
       </div>
@@ -604,371 +962,428 @@ export function Appointments() {
             <p className="text-gray-600">There are no appointments for this period.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+          <>
+            {/* 📱 Mobile Appointment Cards (< md) */}
+            <div className="md:hidden space-y-3 p-4">
+              {paginatedAppointments.map((a) => (
+                <div key={a.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{a.patients?.full_name}</h3>
+                      <p className="text-xs text-gray-500 font-mono">
+                        {a.patients?.phone ? `Tel: ${a.patients.phone}` : ''}
+                      </p>
+                    </div>
+                    <span className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-full ${
+                      a.status === 'confirmed' ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' :
+                      a.status === 'treated' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300' :
+                      a.status === 'cancelled' ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' :
+                      'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+                    }`}>
+                      {a.status.replace('_', ' ')}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                    <div>
+                      <span className="text-gray-400 block text-[10px] uppercase font-bold">Date & Time</span>
+                      <span className="font-semibold text-gray-900 dark:text-white">
+                        {new Date(a.appointment_date).toLocaleDateString()} @ {new Date(a.appointment_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
+                      <span className="font-semibold text-gray-800 dark:text-gray-200">
+                        {a.users?.full_name || 'Unassigned'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {a.remarks && (
+                    <div className="text-xs bg-gray-50 dark:bg-gray-900/50 p-2 rounded-lg text-gray-600 dark:text-gray-400">
+                      <span className="font-bold text-[10px] uppercase block text-gray-400">Remarks</span>
+                      {a.remarks}
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex flex-wrap justify-end gap-1.5">
+                    {a.status === 'pending_confirmation' && (
+                      <button
+                        onClick={() => updateStatus(a.id, 'confirmed')}
+                        className="px-2.5 py-1 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition"
+                      >
+                        Confirm
+                      </button>
+                    )}
+                    {a.status !== 'treated' && a.status !== 'cancelled' && (
+                      <button
+                        onClick={() => updateStatus(a.id, 'treated')}
+                        className="px-2.5 py-1 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition"
+                      >
+                        Treated
+                      </button>
+                    )}
+                    {a.status !== 'cancelled' && (
+                      <button
+                        onClick={() => { setCancellingAppointmentId(a.id); setShowCancelModal(true); }}
+                        className="px-2.5 py-1 bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400 rounded-lg text-xs font-bold hover:bg-red-100 transition"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 💻 Desktop Table View (>= md) */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Date & Time</th>
-                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Patient</th>
-                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Doctor</th>
-                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
-                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Time</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Patient Name</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Contact</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Doctor</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Remarks / Notes</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                  <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 bg-white">
-                {appointments
-                  .filter(appointment => {
-                    const searchLower = searchQuery.toLowerCase();
-                    const patientName = appointment.patients?.full_name?.toLowerCase() || '';
-                    const doctorName = appointment.users?.full_name?.toLowerCase() || '';
-                    return patientName.includes(searchLower) || doctorName.includes(searchLower);
-                  })
-                  .map((appointment) => (
-                    <tr key={appointment.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <Clock className="w-4 h-4 text-green-600 mr-2" />
-                          <span className="font-bold text-gray-900">{formatTime(appointment.appointment_date)}</span>
+                {paginatedAppointments.map((a) => (
+                  <tr key={a.id} className="hover:bg-gray-100 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                      {editingCell?.id === a.id && editingCell?.type === 'date' ? (
+                        <input
+                          type="date"
+                          value={tempValue}
+                          onChange={e => setTempValue(e.target.value)}
+                          onBlur={() => saveInlineDate(a.id)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') saveInlineDate(a.id);
+                            if (e.key === 'Escape') setEditingCell(null);
+                          }}
+                          className="px-2 py-1 border border-green-500 rounded text-sm w-36 outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                          autoFocus
+                        />
+                      ) : (
+                        <div
+                          onClick={() => {
+                            const { dateStr } = getLocalDateTimeComponents(a.appointment_date);
+                            setEditingCell({ id: a.id, type: 'date' });
+                            setTempValue(dateStr);
+                          }}
+                          className="flex items-center cursor-pointer hover:bg-gray-50 hover:text-green-700 p-1 -m-1 rounded transition group"
+                          title="Click to edit date inline"
+                        >
+                          <CalendarIcon className="w-4 h-4 text-green-600 mr-2 opacity-60 group-hover:opacity-100 transition-opacity" />
+                          <span>{new Date(a.appointment_date).toLocaleDateString()}</span>
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {new Date(appointment.appointment_date).toLocaleDateString()}
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">
+                      {editingCell?.id === a.id && editingCell?.type === 'time' ? (
+                        <input
+                          type="time"
+                          value={tempValue}
+                          onChange={e => setTempValue(e.target.value)}
+                          onBlur={() => saveInlineTime(a.id)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') saveInlineTime(a.id);
+                            if (e.key === 'Escape') setEditingCell(null);
+                          }}
+                          className="px-2 py-1 border border-green-500 rounded text-sm w-28 outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                          autoFocus
+                        />
+                      ) : (
+                        <div
+                          onClick={() => {
+                            const { timeStr } = getLocalDateTimeComponents(a.appointment_date);
+                            setEditingCell({ id: a.id, type: 'time' });
+                            setTempValue(timeStr);
+                          }}
+                          className="flex items-center cursor-pointer hover:bg-gray-50 hover:text-green-700 p-1 -m-1 rounded transition group"
+                          title="Click to edit time inline"
+                        >
+                          <Clock className="w-4 h-4 text-green-600 mr-2 opacity-60 group-hover:opacity-100 transition-opacity" />
+                          <span>{formatTime(a.appointment_date)}</span>
                         </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col">
-                          <span className="font-medium text-gray-900">{appointment.patients.full_name}</span>
-                          <span className="text-xs text-gray-500">{appointment.patients.phone}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center text-sm text-gray-700">
-                          <User className="w-4 h-4 text-gray-400 mr-2" />
-                          {appointment.users.full_name}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col">
-                          <span className="text-sm text-gray-700 capitalize">{appointment.appointment_type.replace('_', ' ')}</span>
-                          <span className="text-xs text-gray-500">{appointment.duration_minutes} mins</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-2.5 py-1 text-xs rounded-full font-medium ${getStatusColor(appointment.status)}`}>
-                          {appointment.status === 'treated' ? 'Treated' : appointment.status.replace('_', ' ')}
-                        </span>
-                        {appointment.status === 'cancelled' && appointment.cancellation_reason && (
-                          <div className="text-[10px] text-red-600 mt-1 max-w-[150px] truncate" title={appointment.cancellation_reason}>
-                            Reason: {appointment.cancellation_reason}
-                          </div>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {a.patients.full_name}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {a.patients.phone || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center text-sm text-gray-700">
+                        <User className="w-4 h-4 text-gray-400 mr-2" />
+                        {a.users.full_name}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <select
+                        value={a.appointment_type}
+                        onChange={(e) => updateAppointmentType(a.id, e.target.value)}
+                        className="px-2 py-1 text-sm bg-transparent border border-transparent hover:border-gray-300 rounded cursor-pointer outline-none focus:ring-2 focus:ring-green-500 text-gray-700 capitalize font-medium"
+                        title="Click to change appointment type inline"
+                      >
+                        <option value="consultation">Consultation</option>
+                        <option value="follow_up">Follow-up</option>
+                        <option value="emergency">Emergency</option>
+                        <option value="procedure">Procedure</option>
+                      </select>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" title={a.notes}>
+                      {a.notes || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <select
+                        value={a.status}
+                        onChange={(e) => handleStatusChange(a.id, e.target.value)}
+                        className={`px-2.5 py-1 text-xs rounded-full font-medium border-0 cursor-pointer outline-none focus:ring-2 focus:ring-green-500 bg-opacity-100 ${getStatusColor(a.status)}`}
+                        title="Click to change status inline"
+                      >
+                        <option value="pending_confirmation" className="bg-white text-gray-700 font-normal">Pending</option>
+                        <option value="confirmed" className="bg-white text-gray-700 font-normal">Confirmed</option>
+                        <option value="treated" className="bg-white text-gray-700 font-normal">Treated</option>
+                        <option value="cancelled" className="bg-white text-gray-700 font-normal">Cancelled</option>
+                        <option value="completed" className="bg-white text-gray-700 font-normal">Completed</option>
+                      </select>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex items-center justify-end space-x-2">
+                        {a.status === 'pending_confirmation' && (
+                          <>
+                            <button onClick={() => updateStatus(a.id, 'confirmed')} className="p-1.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"><Check className="w-4 h-4" /></button>
+                            <button onClick={() => { setCancellingAppointmentId(a.id); setShowCancelModal(true); }} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"><Plus className="w-4 h-4 rotate-45" /></button>
+                          </>
                         )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right">
-                        <div className="flex items-center justify-end space-x-2">
-                          {appointment.status === 'pending_confirmation' && (
-                            <div className="flex space-x-1">
-                              <button
-                                onClick={() => updateStatus(appointment.id, 'confirmed')}
-                                className="p-1.5 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition"
-                                title="Confirm"
-                              >
-                                <Check className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setCancellingAppointmentId(appointment.id);
-                                  setShowCancelModal(true);
-                                }}
-                                className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition"
-                                title="Cancel"
-                              >
-                                <Plus className="w-4 h-4 rotate-45" />
-                              </button>
-                            </div>
-                          )}
-                          {appointment.status === 'confirmed' && (
-                            <button
-                              onClick={() => updateStatus(appointment.id, 'treated')}
-                              className="p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
-                              title="Mark Treated"
-                            >
-                              <Check className="w-4 h-4" />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => openEditModal(appointment)}
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-100"
-                            title="Edit Appointment"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        <button onClick={() => openEditModal(a)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg border border-blue-100"><Edit className="w-4 h-4" /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <p className="text-xs text-gray-500">
+                Showing <span className="font-semibold text-gray-900">{(currentPage - 1) * itemsPerPage + 1}</span> to{' '}
+                <span className="font-semibold text-gray-900">{Math.min(currentPage * itemsPerPage, filteredAppointments.length)}</span> of{' '}
+                <span className="font-semibold text-gray-900">{filteredAppointments.length}</span> appointments
+              </p>
+              <div className="flex items-center space-x-1">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => p - 1)}
+                  className="p-1.5 border border-gray-300 rounded-lg disabled:opacity-30 hover:bg-white transition bg-white text-gray-700 disabled:pointer-events-none"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                {getPageNumbers().map((page, i) => (
+                  <button
+                    key={i}
+                    disabled={page === '...'}
+                    onClick={() => typeof page === 'number' && setCurrentPage(page)}
+                    className={`w-8 h-8 rounded-lg text-xs font-bold transition ${
+                      currentPage === page
+                        ? 'bg-green-600 text-white shadow-sm'
+                        : page === '...'
+                        ? 'text-gray-400 cursor-default'
+                        : 'border border-gray-300 hover:bg-white text-gray-600 bg-white'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                ))}
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => p + 1)}
+                  className="p-1.5 border border-gray-300 rounded-lg disabled:opacity-30 hover:bg-white transition bg-white text-gray-700 disabled:pointer-events-none"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </div>
 
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">{isEditing ? 'Edit Appointment' : 'Schedule New Appointment'}</h2>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-4">
-                <SearchDropdown
-                  label="Patient"
-                  placeholder="Search patient by name or number..."
-                  items={patients}
-                  selectedId={formData.patient_id}
-                  displayFn={(p) => `${p.full_name} (${p.patient_number})`}
-                  onSelect={(id) => setFormData({ ...formData, patient_id: id })}
-                  onAddNew={() => setShowPatientModal(true)}
-                  addNewLabel="Quick Add Patient"
-                />
-
-                <SearchDropdown
-                  label="Doctor"
-                  placeholder="Search doctor..."
-                  items={doctors}
-                  selectedId={formData.doctor_id}
-                  onSelect={(id) => setFormData({ ...formData, doctor_id: id })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Appointment Date</label>
-                <input
-                  type="date"
-                  value={formData.appointment_date}
-                  onChange={(e) => setFormData({ ...formData, appointment_date: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-                  required
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium text-gray-700">Available Slots</label>
-                  <div className="relative">
-                    <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder="Search time..."
-                      value={slotSearchQuery}
-                      onChange={(e) => setSlotSearchQuery(e.target.value)}
-                      className="pl-7 pr-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-green-500 outline-none w-32 font-roboto"
+          <div className="bg-white rounded-xl max-w-2xl w-full p-6 shadow-xl overflow-y-auto max-h-[90vh]">
+            <h2 className="text-xl font-bold text-gray-900 mb-6">{isEditing ? 'Edit Appointment' : 'New Appointment'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Column 1 */}
+                <div className="space-y-4">
+                  <SearchDropdown
+                    label="Patient"
+                    placeholder="Search patient..."
+                    items={patients}
+                    selectedId={formData.patient_id}
+                    displayFn={p => p?.full_name ? `${p.full_name} (${p.patient_number || 'N/A'})` : (p?.patient_number || p?.id || 'Unknown Patient')}
+                    onSelect={id => setFormData({ ...formData, patient_id: id })}
+                    onAddNew={() => setShowPatientModal(true)}
+                  />
+                  <SearchDropdown
+                    label="Doctor"
+                    placeholder="Search doctor..."
+                    items={doctors}
+                    selectedId={formData.doctor_id}
+                    onSelect={id => setFormData({ ...formData, doctor_id: id })}
+                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Appointment Type</label>
+                    <select 
+                      value={formData.appointment_type} 
+                      onChange={e => setFormData({ ...formData, appointment_type: e.target.value })} 
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-green-500 text-sm bg-white"
+                    >
+                      <option value="consultation">Consultation</option>
+                      <option value="follow_up">Follow-up</option>
+                      <option value="emergency">Emergency</option>
+                      <option value="procedure">Procedure</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Duration (minutes)</label>
+                    <input 
+                      type="number" 
+                      value={formData.duration_minutes} 
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg outline-none text-sm bg-gray-50 cursor-not-allowed text-gray-500" 
+                      readOnly 
+                      required 
                     />
                   </div>
-                </div>
-                {slotLoading ? (
-                  <div className="flex items-center space-x-2 text-sm text-gray-500 py-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600" />
-                    <span>Loading slots...</span>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Status</label>
+                    <select 
+                      value={formData.status} 
+                      onChange={e => setFormData({ ...formData, status: e.target.value })} 
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-green-500 text-sm bg-white"
+                    >
+                      <option value="pending_confirmation">Pending Confirmation</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="treated">Treated</option>
+                      <option value="cancelled">Cancelled</option>
+                      <option value="completed">Completed</option>
+                    </select>
                   </div>
-                ) : !formData.doctor_id ? (
-                  <p className="text-sm text-gray-500 py-2 italic font-roboto">Select a doctor to see availability</p>
-                ) : availableSlots.length === 0 ? (
-                  <p className="text-sm text-red-500 py-2 italic font-roboto">No available slots for this date</p>
-                ) : (
-                  <div className="grid grid-cols-3 gap-2 mt-1 max-h-40 overflow-y-auto p-1 border border-gray-100 rounded-lg">
-                    {availableSlots
-                      .filter(slot => 
-                        formatTime(slot.start_time).toLowerCase().includes(slotSearchQuery.toLowerCase())
-                      )
-                      .map((slot) => (
-                        <button
-                          key={slot.id}
-                          type="button"
-                          onClick={() => {
-                            if (!slot.is_booked) {
-                              setSelectedSlotId(slot.id);
-                              const duration = (new Date(slot.end_time).getTime() - new Date(slot.start_time).getTime()) / 60000;
-                              setFormData(prev => ({ ...prev, duration_minutes: Math.round(duration) }));
-                            }
-                          }}
-                          disabled={slot.is_booked}
-                          className={`px-2 py-2 text-xs font-medium rounded-lg border transition font-roboto ${
-                            slot.is_booked
-                              ? 'bg-red-50 border-red-100 text-red-400 cursor-not-allowed opacity-75'
-                              : selectedSlotId === slot.id
-                                ? 'bg-green-600 border-green-600 text-white shadow-sm'
-                                : 'bg-white border-gray-200 text-gray-700 hover:border-green-500 hover:text-green-600'
-                          }`}
-                        >
-                          <div className="flex flex-col">
-                            <span>{formatTime(slot.start_time)}</span>
-                            {slot.is_booked && <span className="text-[8px] uppercase font-bold text-red-500 mt-1">Booked</span>}
-                          </div>
-                        </button>
-                      ))}
+                </div>
+
+                {/* Column 2 */}
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Date</label>
+                    <input 
+                      type="date" 
+                      value={formData.appointment_date} 
+                      onChange={e => setFormData({ ...formData, appointment_date: e.target.value })} 
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-green-500 text-sm" 
+                      required 
+                    />
                   </div>
-                )}
-                {!selectedSlotId && availableSlots.length > 0 && (
-                  <p className="text-xs text-amber-600 mt-1 font-roboto italic">Please select a time slot</p>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="hidden">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Duration (mins)</label>
-                  <input
-                    type="number"
-                    value={formData.duration_minutes}
-                    onChange={(e) => setFormData({ ...formData, duration_minutes: parseInt(e.target.value) })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none font-roboto"
-                    min="15"
-                    step="15"
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Time</label>
+                    <input 
+                      type="time" 
+                      value={formData.appointment_time} 
+                      onChange={e => setFormData({ ...formData, appointment_time: e.target.value })} 
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-green-500 text-sm" 
+                      required 
+                    />
+                  </div>
+
+                  {/* Slot picker (helper) */}
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Available Slots (Quick Select)</label>
+                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto border border-gray-200 p-2 rounded-lg bg-gray-50">
+                      {availableSlots.length === 0 ? (
+                        <p className="col-span-3 text-center text-xs text-gray-400 py-2 italic">
+                          {formData.doctor_id && formData.appointment_date
+                            ? 'No available slots for this doctor on this date.'
+                            : 'Select doctor & date to view slots.'}
+                        </p>
+                      ) : (
+                        availableSlots.map(slot => (
+                          <button
+                            key={slot.id}
+                            type="button"
+                            onClick={() => !slot.is_booked && handleSelectSlot(slot)}
+                            className={`p-1.5 text-[10px] font-semibold rounded border transition ${
+                              slot.is_booked 
+                                ? 'bg-red-50 text-red-300 border-red-100 cursor-not-allowed' 
+                                : selectedSlotId === slot.id 
+                                ? 'bg-green-600 text-white border-green-600 shadow-sm' 
+                                : 'bg-white hover:border-green-500 text-gray-700 border-gray-200'
+                            }`}
+                            disabled={slot.is_booked}
+                          >
+                            {formatTime(slot.start_time)}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                  <select
-                    value={formData.appointment_type}
-                    onChange={(e) => setFormData({ ...formData, appointment_type: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-                  >
-                    <option value="consultation">Consultation</option>
-                    <option value="follow_up">Follow-up</option>
-                    <option value="emergency">Emergency</option>
-                    <option value="procedure">Procedure</option>
-                  </select>
+
+                {/* Bottom Row spanned fields */}
+                <div className="md:col-span-2 space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Remarks / Notes</label>
+                    <textarea
+                      value={formData.notes}
+                      onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-green-500 text-sm"
+                      rows={3}
+                      placeholder="Add any remarks or notes..."
+                    />
+                  </div>
+
+                  {formData.status === 'cancelled' && (
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1 text-red-600">Cancellation Reason</label>
+                      <textarea
+                        value={formData.cancellation_reason}
+                        onChange={e => setFormData({ ...formData, cancellation_reason: e.target.value })}
+                        className="w-full px-3 py-2 border border-red-300 rounded-lg outline-none focus:ring-2 focus:ring-red-500 text-sm bg-red-50"
+                        rows={2}
+                        placeholder="Enter cancellation reason..."
+                        required
+                      />
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea
-                  value={formData.notes}
-                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-                  rows={2}
-                />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-                >
-                  <option value="pending_confirmation">Pending Confirmation</option>
-                  <option value="confirmed">Confirmed</option>
-                  <option value="treated">Treated</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-              </div>
-
-              {formData.status === 'cancelled' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cancellation Reason *</label>
-                  <textarea
-                    value={formData.cancellation_reason}
-                    onChange={(e) => setFormData({ ...formData, cancellation_reason: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
-                    rows={2}
-                    placeholder="Provide a reason for cancellation..."
-                    required
-                  />
-                </div>
-              )}
-
-              <div className="flex space-x-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg hover:from-green-700 hover:to-emerald-700 transition shadow-md"
-                >
-                  Schedule
-                </button>
+              <div className="flex space-x-3 mt-6 border-t pt-4">
+                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2.5 border border-gray-300 hover:bg-gray-50 rounded-lg text-sm transition">Cancel</button>
+                <button type="submit" className="flex-1 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition">Save</button>
               </div>
             </form>
           </div>
         </div>
       )}
+
       {showPatientModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-xl max-w-sm w-full p-6 shadow-2xl">
-            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Plus className="w-6 h-6 text-green-600" />
-              Quick Add Patient
-            </h2>
+          <div className="bg-white rounded-xl max-w-sm w-full p-6">
+            <h2 className="text-xl font-bold mb-4">Quick Add Patient</h2>
             <form onSubmit={handleCreatePatient} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
-                <input
-                  type="text"
-                  value={newPatient.full_name}
-                  onChange={(e) => setNewPatient({ ...newPatient, full_name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
-                  <input
-                    type="date"
-                    value={newPatient.date_of_birth}
-                    onChange={(e) => setNewPatient({ ...newPatient, date_of_birth: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
-                  <select
-                    value={newPatient.gender}
-                    onChange={(e) => setNewPatient({ ...newPatient, gender: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-                  >
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number *</label>
-                <input
-                  type="tel"
-                  value={newPatient.phone}
-                  onChange={(e) => setNewPatient({ ...newPatient, phone: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-                  required
-                  placeholder="+27..."
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email (Optional)</label>
-                <input
-                  type="email"
-                  value={newPatient.email}
-                  onChange={(e) => setNewPatient({ ...newPatient, email: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
-                  placeholder="Leave blank to auto-generate"
-                />
-              </div>
+              <input type="text" placeholder="Full Name" value={newPatient.full_name} onChange={e => setNewPatient({ ...newPatient, full_name: e.target.value })} className="w-full px-3 py-2 border rounded-lg" required />
+              <input type="tel" placeholder="Phone" value={newPatient.phone} onChange={e => setNewPatient({ ...newPatient, phone: e.target.value })} className="w-full px-3 py-2 border rounded-lg" required />
               <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowPatientModal(false)}
-                  className="flex-1 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold shadow-md disabled:opacity-50"
-                >
-                  {loading ? 'Adding...' : 'Add Patient'}
-                </button>
+                <button type="button" onClick={() => setShowPatientModal(false)} className="flex-1 py-2 border rounded-lg">Cancel</button>
+                <button type="submit" className="flex-1 py-2 bg-green-600 text-white rounded-lg">Add</button>
               </div>
             </form>
           </div>
@@ -977,61 +1392,25 @@ export function Appointments() {
 
       {showCancelModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] p-4">
-          <div className="bg-white rounded-xl max-w-sm w-full p-6 shadow-2xl">
-            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Plus className="w-6 h-6 text-red-600 rotate-45" />
-              Cancel Appointment
-            </h2>
+          <div className="bg-white rounded-xl max-w-sm w-full p-6">
+            <h2 className="text-xl font-bold mb-4">Cancel Appointment</h2>
             <form onSubmit={handleCancelSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Cancellation *</label>
-                <textarea
-                  value={cancellationReason}
-                  onChange={(e) => setCancellationReason(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
-                  rows={3}
-                  placeholder="Please provide a reason..."
-                  required
-                />
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCancelModal(false);
-                    setCancellingAppointmentId(null);
-                    setCancellationReason('');
-                  }}
-                  className="flex-1 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium"
-                >
-                  Back
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-md"
-                >
-                  Confirm Cancel
-                </button>
+              <textarea placeholder="Reason..." value={cancellationReason} onChange={e => setCancellationReason(e.target.value)} className="w-full px-3 py-2 border rounded-lg" required />
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setShowCancelModal(false)} className="flex-1 py-2 border rounded-lg">Back</button>
+                <button type="submit" className="flex-1 py-2 bg-red-600 text-white rounded-lg">Confirm</button>
               </div>
             </form>
           </div>
         </div>
       )}
-      {/* Success Modal */}
+
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-xl max-w-sm w-full p-6 text-center animate-in zoom-in-95 duration-200 shadow-2xl">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Check className="w-8 h-8 text-green-600" />
-            </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-2 font-roboto">Success!</h3>
-            <p className="text-gray-600 mb-6 font-roboto">{successMessage}</p>
-            <button
-              onClick={() => setShowSuccessModal(false)}
-              className="w-full py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-bold hover:from-green-700 hover:to-emerald-700 transition shadow-md font-roboto"
-            >
-              Great, thanks!
-            </button>
+          <div className="bg-white rounded-xl max-w-sm w-full p-6 text-center">
+            <Check className="w-12 h-12 text-green-600 mx-auto mb-4" />
+            <p className="mb-6">{successMessage}</p>
+            <button onClick={() => setShowSuccessModal(false)} className="w-full py-3 bg-green-600 text-white rounded-lg">OK</button>
           </div>
         </div>
       )}

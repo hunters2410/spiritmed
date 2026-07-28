@@ -55,7 +55,7 @@ export function HospitalFiles() {
 
     useEffect(() => {
         loadFiles();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadFiles() {
         if (!profile?.branch_id) return;
@@ -269,9 +269,9 @@ export function HospitalFiles() {
                                         </div>
                                         <div className="flex gap-1">
                                             <button onClick={() => { setEditingFile(f); setEditFormData({ name: f.name, description: f.description || '', category: f.category }); setShowEditModal(true); }}
-                                                className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition opacity-0 group-hover:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>
+                                                className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition"><Edit2 className="w-3.5 h-3.5" /></button>
                                             <button onClick={() => handleDelete(f)}
-                                                className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-md transition opacity-0 group-hover:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-md transition"><Trash2 className="w-3.5 h-3.5" /></button>
                                         </div>
                                     </div>
                                     <h3 className="font-bold text-gray-900 dark:text-white truncate text-sm mb-1" title={f.name}>{f.name}</h3>
@@ -288,7 +288,7 @@ export function HospitalFiles() {
                         </div>
                     ) : (
                         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                            <table className="w-full text-sm">
+                            <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                                 <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-600 dark:text-gray-400 text-xs uppercase font-bold tracking-wider">
                                     <tr>
                                         <th className="px-6 py-4 text-left">Document</th>

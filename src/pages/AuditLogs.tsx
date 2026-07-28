@@ -34,7 +34,7 @@ export function AuditLogs() {
 
   useEffect(() => {
     loadLogs();
-  }, [profile?.branch_id]);
+  }, [profile?.id]);
 
   async function loadLogs() {
     if (!profile?.branch_id) return;
@@ -147,7 +147,7 @@ export function AuditLogs() {
                 </tr>
               ) : (
                 paginated.map((log) => (
-                  <tr key={log.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/40 transition-colors">
+                  <tr key={log.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/40 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-semibold text-gray-900 dark:text-white">
                         {new Date(log.created_at).toLocaleDateString()}

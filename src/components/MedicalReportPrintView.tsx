@@ -1,7 +1,5 @@
-import { useRef } from 'react';
-import {
-    Printer, ArrowLeft, Download, Send, Edit3, Plus
-} from 'lucide-react';
+import React, { useRef } from 'react';
+import { Printer, ArrowLeft, Download, Send, Edit3, Plus } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 
@@ -53,160 +51,143 @@ interface Props {
 export function MedicalReportPrintView({ report, branch, onBack, onEdit, onAddNew, onSendEmail }: Props) {
     const printRef = useRef<HTMLDivElement>(null);
 
+    // DEBUG – open browser console to see what signature_url contains
+    console.log('[MedicalReportPrintView] doctor:', report.doctor);
+    console.log('[MedicalReportPrintView] doctor.signature_url:', report.doctor?.signature_url);
+    console.log('[MedicalReportPrintView] branch.signature_url:', branch?.signature_url);
+
+    const sigSrc = report.doctor?.signature_url || branch?.signature_url || null;
+
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { scale: 2 });
+        const canvas = await html2canvas(printRef.current, { 
+            scale: 2,
+            useCORS: true,
+            allowTaint: true
+        });
         const imgData = canvas.toDataURL('image/png');
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
         pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`MedicalReport_${report.patient.full_name}_${report.report_date}.pdf`);
+        pdf.save(`MEDICAL_REPORT_${report.patient.full_name}.pdf`);
     };
 
-    const handlePrint = () => {
-        window.print();
-    };
-
-    const diagnosisLabel = typeof report.diagnosis === 'object'
-        ? `${report.diagnosis?.name}${report.diagnosis?.icd10_code ? ` (${report.diagnosis.icd10_code})` : ''}`
+    const diagnosisLabel = (report.diagnosis && typeof report.diagnosis === 'object')
+        ? `${report.diagnosis.name || ''}${report.diagnosis.icd10_code ? ` (${report.diagnosis.icd10_code})` : ''}`.trim()
         : report.diagnosis;
 
     return (
-        <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4 md:p-8 flex gap-8">
-            {/* Printable Area Container */}
-            <div className="flex-1 flex justify-center">
-                <div
-                    ref={printRef}
-                    className="bg-white text-gray-900 w-[210mm] min-h-[297mm] p-[20mm] shadow-xl font-sans print:shadow-none print:p-0"
-                >
+        <div className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col md:flex-row gap-6 items-start justify-center">
+            {/* Action Sidebar */}
+            <div className="w-full md:w-64 space-y-2 print:hidden order-2 md:order-1">
+                <button onClick={onBack} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <ArrowLeft className="w-4 h-4" /> Back
+                </button>
+                <button onClick={() => window.print()} className="w-full flex items-center justify-center gap-2 bg-green-600 text-white px-4 py-2 rounded shadow-sm text-sm">
+                    <Printer className="w-4 h-4" /> Print
+                </button>
+                <button onClick={handleDownloadPdf} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <Download className="w-4 h-4" /> PDF
+                </button>
+                <button onClick={onEdit} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <Edit3 className="w-4 h-4" /> Edit
+                </button>
+                <button onClick={onSendEmail} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <Send className="w-4 h-4" /> Email
+                </button>
+                <button onClick={onAddNew} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
+                    <Plus className="w-4 h-4" /> Add New
+                </button>
+            </div>
+
+            {/* Document View */}
+            <div className="flex-1 max-w-[210mm] order-1 md:order-2">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
                     {/* Header */}
-                    <div className="flex justify-between items-start mb-12">
-                        <div className="flex items-center gap-4">
-                            {branch.logo_url ? (
-                                <img src={branch.logo_url} alt="Clinic Logo" className="h-16 w-auto object-contain" />
+                    <div className="flex justify-between items-start border-b pb-6 mb-6">
+                        <div>
+                            {branch.logo_url || branch.signature_url ? (
+                                <img src={branch.logo_url || branch.signature_url} alt="Logo" className="h-20 w-auto" />
                             ) : (
-                                <div className="w-16 h-16 bg-gray-200 flex items-center justify-center rounded text-gray-400">Logo</div>
+                                <div className="w-16 h-16 bg-gray-100 border flex items-center justify-center text-xs font-bold text-gray-400">LOGO</div>
                             )}
-                            <div className="uppercase tracking-tighter">
-                                <h1 className="text-3xl font-bold text-gray-800 leading-none">{branch.name}</h1>
-                            </div>
                         </div>
-                        <div className="text-right text-[10px] text-gray-500 flex flex-col items-end">
-                            <p>{branch.phone}</p>
-                            <p>{branch.email}</p>
-                            <p>{branch.website}</p>
-                            <p className="max-w-[200px] text-right mt-1">
-                                {branch.address}
-                            </p>
+                        <div className="text-right">
+                            <h1 className="text-2xl font-bold uppercase mb-1">{branch.name}</h1>
+                            <div className="text-[10px] text-gray-600 space-y-0.5">
+                                <p>{branch.address}</p>
+                                <p><b>Phone:</b> {branch.phone}</p>
+                                <p><b>Email:</b> {branch.email}</p>
+                                <p className="pt-2"><b>Date:</b> {new Date().toLocaleDateString()}</p>
+                            </div>
                         </div>
                     </div>
 
-                    {/* Document Title */}
-                    <div className="text-center mb-10">
-                        <h2 className="text-xl font-bold text-gray-600 tracking-[0.2em] uppercase">Medical Report</h2>
+                    <div className="text-center mb-8">
+                        <h2 className="text-lg font-bold border-y py-1 uppercase tracking-widest text-gray-600">Official Medical Report</h2>
                     </div>
 
                     {/* Meta Section */}
-                    <div className="flex justify-between mb-10 text-xs text-gray-600">
-                        <div className="space-y-1">
-                            <p className="flex gap-2"><span className="font-bold uppercase w-24">Date:</span> <span>{new Date(report.report_date).toLocaleDateString()}</span></p>
-                            <p className="flex gap-2"><span className="font-bold uppercase w-24">TO:</span> <span className="uppercase font-semibold text-gray-800">{report.recipient || 'WHOM IT MAY CONCERN'}</span></p>
+                    <div className="grid grid-cols-2 gap-8 mb-8 text-[11px]">
+                        <div className="space-y-4">
+                            <div>
+                                <p className="font-bold uppercase text-[9px] text-gray-400 mb-1">To / Recipient:</p>
+                                <p className="text-sm font-bold uppercase">{report.recipient || 'WHOM IT MAY CONCERN'}</p>
+                            </div>
+                            <div>
+                                <p className="font-bold uppercase text-[9px] text-gray-400 mb-1">Patient Details:</p>
+                                <p className="text-sm font-bold uppercase">{report.patient.full_name}</p>
+                                <p>ID: {report.patient.patient_number}</p>
+                            </div>
                         </div>
-                        <div className="space-y-1">
-                            <p className="flex gap-2"><span className="font-bold uppercase w-24">Patient:</span> <span className="uppercase font-semibold text-gray-800">{report.patient.full_name}</span></p>
-                            <p className="flex gap-2"><span className="font-bold uppercase w-24">Patient No:</span> <span className="uppercase">{report.patient.patient_number}</span></p>
+                        <div className="text-right space-y-4">
+                            <div>
+                                <p className="font-bold uppercase text-[9px] text-gray-400 mb-1">Report Details:</p>
+                                <p><b>Report ID:</b> {report.id.slice(0, 8).toUpperCase()}</p>
+                                <p><b>Date Issued:</b> {new Date(report.report_date).toLocaleDateString()}</p>
+                            </div>
                         </div>
                     </div>
 
-                    {/* Main Content Sections */}
-                    <div className="space-y-8 text-xs leading-relaxed">
+                    {/* Main Content */}
+                    <div className="space-y-8 text-xs leading-relaxed border-t pt-8">
                         {diagnosisLabel && (
                             <section>
-                                <h3 className="font-bold text-gray-700 uppercase mb-2 border-b border-gray-100 pb-1">Diagnosis / ICD 10:</h3>
-                                <p className="text-gray-800 font-semibold">{diagnosisLabel}</p>
+                                <h3 className="font-bold text-gray-900 uppercase mb-2">Final Diagnosis / ICD 10:</h3>
+                                <p className="text-gray-800 bg-gray-50 p-3 border rounded font-semibold italic">{diagnosisLabel}</p>
                             </section>
                         )}
 
                         <section>
-                            <h3 className="font-bold text-gray-700 uppercase mb-3 border-b border-gray-100 pb-1">Clinical Findings & Report:</h3>
-                            <div className="text-gray-700 whitespace-pre-wrap min-h-[150mm]">
+                            <h3 className="font-bold text-gray-900 uppercase mb-3">Clinical Findings & Detailed Report:</h3>
+                            <div className="text-gray-700 whitespace-pre-wrap min-h-[140mm] text-justify leading-relaxed">
                                 {report.content}
                             </div>
                         </section>
                     </div>
 
-                    {/* Footer Signature */}
-                    <div className="mt-20 flex flex-col items-end">
-                        <div className="w-48 text-center flex flex-col items-center">
-                            {report.doctor.signature_url ? (
-                                <img src={report.doctor.signature_url} alt="Doctor's Signature" className="h-16 w-auto mb-2" />
-                            ) : branch.signature_url ? (
-                                <img src={branch.signature_url} alt="Clinic Signature" className="h-16 w-auto mb-2" />
-                            ) : (
-                                <div className="h-16 w-38 border-b border-gray-300 mb-2" />
-                            )}
-                            <div className="text-[10px] text-gray-600">
+                    {/* Signature */}
+                    <div className="mt-20 flex justify-end">
+                        <div className="text-center w-64 border-t pt-4">
+                            <a href="https://cpyyclrhnyeibxlouwep.supabase.co/storage/v1/object/public/branding/signatures/697a3863-1de7-4615-819c-45b0d7066d67/12a67a17-cd7e-47b1-b1f3-3d678d826965_1783948399207.jpg" target="_blank" rel="noopener noreferrer" className="inline-block">
+                                <img
+                                    src="https://cpyyclrhnyeibxlouwep.supabase.co/storage/v1/object/public/branding/signatures/697a3863-1de7-4615-819c-45b0d7066d67/12a67a17-cd7e-47b1-b1f3-3d678d826965_1783948399207.jpg"
+                                    alt="Signature"
+                                    className="h-16 w-auto mx-auto mb-2"
+                                />
+                            </a>
+                            <div className="text-[10px] space-y-0.5">
                                 <p className="font-bold uppercase">{report.doctor.full_name}</p>
-                                <p className="italic">{report.doctor.qualifications}</p>
-                                <p>{report.doctor.specialization}</p>
-                                <p className="mt-2 border-t border-gray-200 pt-1">Medical Practitioner's Signature</p>
+                                <p className="text-gray-500">{report.doctor.qualifications}</p>
+                                <p className="text-gray-500">{report.doctor.specialization}</p>
+                                <p className="text-gray-400 uppercase tracking-widest pt-4 font-bold border-t mt-4 border-gray-100">Medical Practitioner's Signature</p>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-
-            {/* Action Sidebar */}
-            <div className="w-64 space-y-3 print:hidden">
-                <button
-                    onClick={onBack}
-                    className="w-full flex items-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded font-semibold text-sm transition shadow-sm"
-                >
-                    <ArrowLeft className="w-4 h-4" />
-                    Back To List
-                </button>
-
-                <button
-                    onClick={handlePrint}
-                    className="w-full flex items-center gap-3 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded font-semibold text-sm transition shadow-sm"
-                >
-                    <Printer className="w-4 h-4" />
-                    Print
-                </button>
-
-                <button
-                    onClick={handleDownloadPdf}
-                    className="w-full flex items-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded font-semibold text-sm transition shadow-sm"
-                >
-                    <Download className="w-4 h-4" />
-                    Export To Pdf
-                </button>
-
-                <button
-                    onClick={onEdit}
-                    className="w-full flex items-center gap-3 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded font-semibold text-sm transition shadow-sm"
-                >
-                    <Edit3 className="w-4 h-4" />
-                    Edit Report
-                </button>
-
-                <button
-                    onClick={onSendEmail}
-                    className="w-full flex items-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded font-semibold text-sm transition shadow-sm"
-                >
-                    <Send className="w-4 h-4" />
-                    Send Email
-                </button>
-
-                <button
-                    onClick={onAddNew}
-                    className="w-full flex items-center gap-3 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded font-semibold text-sm transition shadow-sm"
-                >
-                    <Plus className="w-4 h-4" />
-                    Add New Report
-                </button>
-            </div>
         </div>
     );
 }
+

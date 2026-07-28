@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Search, Activity, HeartPulse, Thermometer, Wind, Scale, Ruler, Droplets, History, User } from 'lucide-react';
+import { Plus, Search, Activity, HeartPulse, Thermometer, Wind, Scale, Ruler, Droplets, History, User, ChevronLeft, ChevronRight } from 'lucide-react';
+import { SearchablePatientSelect } from '../components/SearchablePatientSelect';
+import { useToast } from '../contexts/ToastContext';
 
 interface VitalSigns {
     id: string;
@@ -27,11 +29,14 @@ interface VitalSigns {
 
 export function Vitals() {
     const { profile } = useAuth();
+    const { showToast } = useToast();
     const [vitalsList, setVitalsList] = useState<VitalSigns[]>([]);
     const [patients, setPatients] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
     const [formData, setFormData] = useState({
         patient_id: '',
         temperature: '',
@@ -59,7 +64,7 @@ export function Vitals() {
 
     const loadVitals = async () => {
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('vital_signs')
                 .select(`
           *,
@@ -68,6 +73,11 @@ export function Vitals() {
         `)
                 .order('recorded_at', { ascending: false });
 
+            if (profile?.role !== 'super_admin' && profile?.branch_id) {
+                query = query.eq('branch_id', profile.branch_id);
+            }
+
+            const { data, error } = await query;
             if (error) throw error;
             setVitalsList(data || []);
         } catch (error) {
@@ -79,12 +89,17 @@ export function Vitals() {
 
     const loadPatients = async () => {
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('patients')
                 .select('id, full_name, patient_number')
                 .eq('status', 'active')
                 .order('full_name');
 
+            if (profile?.role !== 'super_admin' && profile?.branch_id) {
+                query = query.eq('branch_id', profile.branch_id);
+            }
+
+            const { data, error } = await query;
             if (error) throw error;
             setPatients(data || []);
         } catch (error) {
@@ -100,6 +115,7 @@ export function Vitals() {
                 .from('vital_signs')
                 .insert([{
                     ...formData,
+                    branch_id: profile?.branch_id,
                     recorded_by: profile?.id,
                     recorded_at: new Date().toISOString()
                 }]);
@@ -109,10 +125,10 @@ export function Vitals() {
             setShowModal(false);
             resetForm();
             loadVitals();
-            alert('Vital signs recorded successfully!');
-        } catch (error) {
+            showToast('Vital signs recorded successfully!');
+        } catch (error: any) {
             console.error('Error recording vitals:', error);
-            alert('Failed to record vitals');
+            showToast(error.message || 'Failed to record vitals', 'error');
         } finally {
             setLoading(false);
         }
@@ -182,7 +198,7 @@ export function Vitals() {
                 ) : (
                     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
                         <div className="overflow-x-auto">
-                            <table className="w-full">
+                            <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
                                 <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
                                     <tr>
                                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Patient</th>
@@ -195,8 +211,8 @@ export function Vitals() {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                                    {filteredVitals.map((v) => (
-                                        <tr key={v.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                                    {filteredVitals.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((v) => (
+                                        <tr key={v.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                                             <td className="px-6 py-4">
                                                 <div className="text-sm font-medium text-gray-900 dark:text-white">{v.patient?.full_name}</div>
                                                 <div className="text-xs text-gray-500 dark:text-gray-400">{v.patient?.patient_number}</div>
@@ -243,6 +259,61 @@ export function Vitals() {
                                 </tbody>
                             </table>
                         </div>
+                        {/* Pagination Controls */}
+                        {filteredVitals.length > 0 && (
+                            <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/10">
+                                <div className="flex items-center gap-4">
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                                        Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filteredVitals.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{filteredVitals.length}</span> records
+                                    </p>
+                                    <div className="flex items-center gap-1.5 border-l pl-4 border-gray-200 dark:border-gray-700">
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Show</span>
+                                        <select
+                                            value={itemsPerPage}
+                                            onChange={(e) => {
+                                                setItemsPerPage(Number(e.target.value));
+                                                setCurrentPage(1);
+                                            }}
+                                            className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-rose-500 cursor-pointer"
+                                        >
+                                            <option value={10}>10</option>
+                                            <option value={25}>25</option>
+                                            <option value={50}>50</option>
+                                            <option value={100}>100</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                {Math.ceil(filteredVitals.length / itemsPerPage) > 1 && (
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                            disabled={currentPage === 1}
+                                            className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                        >
+                                            <ChevronLeft className="w-4 h-4" />
+                                        </button>
+                                        <div className="flex gap-1">
+                                            {Array.from({ length: Math.ceil(filteredVitals.length / itemsPerPage) }, (_, i) => i + 1).map(page => (
+                                                <button
+                                                    key={page}
+                                                    onClick={() => setCurrentPage(page)}
+                                                    className={`w-8 h-8 rounded-lg font-bold transition text-xs ${currentPage === page ? 'bg-rose-600 text-white shadow-md' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent text-gray-600 dark:text-gray-400'}`}
+                                                >
+                                                    {page}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <button
+                                            onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(filteredVitals.length / itemsPerPage)))}
+                                            disabled={currentPage === Math.ceil(filteredVitals.length / itemsPerPage)}
+                                            className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                        >
+                                            <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -261,17 +332,13 @@ export function Vitals() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div className="md:col-span-2">
                                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Patient *</label>
-                                    <select
+                                    <SearchablePatientSelect
+                                        patients={patients}
                                         value={formData.patient_id}
-                                        onChange={(e) => setFormData({ ...formData, patient_id: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-rose-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                        onChange={(patientId) => setFormData({ ...formData, patient_id: patientId })}
+                                        placeholder="Search or select patient by name or ID..."
                                         required
-                                    >
-                                        <option value="">Select Patient</option>
-                                        {patients.map(p => (
-                                            <option key={p.id} value={p.id}>{p.full_name} ({p.patient_number})</option>
-                                        ))}
-                                    </select>
+                                    />
                                 </div>
 
                                 <div>

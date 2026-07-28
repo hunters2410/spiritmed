@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, FileText, Pencil, Trash2, X, Eye } from 'lucide-react';
+import { Plus, FileText, Pencil, Trash2, X, Eye, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { ClinicalDocumentPrintView } from '../components/ClinicalDocumentPrintView';
 import { SearchDropdown } from '../components/SearchDropdown';
 
@@ -55,11 +55,14 @@ export default function MedicalCertificates() {
     const { profile } = useAuth();
     const [certs, setCerts] = useState<MedicalCertificate[]>([]);
     const [loading, setLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
     const [showModal, setShowModal] = useState(false);
     const [showPatientModal, setShowPatientModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
     const [selectedDoc, setSelectedDoc] = useState<MedicalCertificate | null>(null);
     const [branch, setBranch] = useState<any>(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
 
     /* Form State */
     const [form, setForm] = useState({
@@ -81,26 +84,34 @@ export default function MedicalCertificates() {
     const [patients, setPatients] = useState<Patient[]>([]);
 
     useEffect(() => {
-        if (profile?.branch_id) {
+        if (profile) {
             loadAll();
             fetchBranchDetails();
         } else {
             setLoading(false);
         }
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function fetchBranchDetails() {
-        const { data } = await supabase.from('branches').select('*').eq('id', profile?.branch_id).maybeSingle();
+        if (!profile?.branch_id) return;
+        const { data } = await supabase.from('branches').select('*').eq('id', profile.branch_id).maybeSingle();
         setBranch(data);
     }
 
     async function loadAll() {
         setLoading(true);
         try {
-            const [forRes, patRes] = await Promise.all([
-                supabase.from('medical_certificates').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url)').eq('branch_id', profile?.branch_id).order('created_at', { ascending: false }),
-                supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth').eq('branch_id', profile?.branch_id)
-            ]);
+            const bid = profile?.branch_id;
+
+            const forQ = supabase.from('medical_certificates').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url)').order('report_date', { ascending: false }).order('created_at', { ascending: false });
+            const patQ = supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth');
+
+            if (bid) {
+                forQ.eq('branch_id', bid);
+                patQ.eq('branch_id', bid);
+            }
+
+            const [forRes, patRes] = await Promise.all([forQ, patQ]);
 
             setCerts(forRes.data || []);
             setPatients(patRes.data || []);
@@ -165,10 +176,15 @@ export default function MedicalCertificates() {
     async function handleCreatePatient(e: React.FormEvent) {
         e.preventDefault();
         const pNum = `P-${Date.now().toString().slice(-6)}`;
+        const generatedEmail = newPatientForm.email || `patient.${pNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+        const generatedPassword = 'patient123456';
         const { data, error } = await supabase.from('patients').insert([{
             ...newPatientForm,
+            email: generatedEmail,
+            password: generatedPassword,
             patient_number: pNum,
-            branch_id: profile?.branch_id
+            branch_id: profile?.branch_id,
+            status: 'active'
         }]).select().single();
 
         if (error) alert(error.message);
@@ -199,25 +215,95 @@ export default function MedicalCertificates() {
         );
     }
 
+    const filteredCerts = certs.filter(c => {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+        const pName = c.patient?.full_name?.toLowerCase() || '';
+        const pNum = c.patient?.patient_number?.toLowerCase() || '';
+        const purpose = c.purpose?.toLowerCase() || '';
+        const docName = c.doctor?.full_name?.toLowerCase() || '';
+        return pName.includes(query) || pNum.includes(query) || purpose.includes(query) || docName.includes(query);
+    });
+
     return (
         <div className="p-6 max-w-7xl mx-auto">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Medical Certificates</h1>
-                    <p className="text-sm text-gray-500">Generate and manage sick leave or fitness documents</p>
+                    <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Medical Certificates</h1>
+                    <p className="text-xs sm:text-sm text-gray-500">Generate and manage sick leave or fitness documents</p>
                 </div>
                 <button onClick={() => { resetForm(); setShowModal(true); }}
-                    className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition shadow-md font-semibold">
-                    <Plus className="w-5 h-5" /> Add New Certificate
+                    className="flex items-center gap-2 bg-indigo-600 text-white px-3.5 py-2 rounded-xl hover:bg-indigo-700 transition shadow-sm text-xs sm:text-sm font-bold shrink-0">
+                    <Plus className="w-4 h-4" /> Add New Certificate
                 </button>
             </div>
 
-            {/* Table */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+            {/* 🔍 Search Bar */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-3.5 mb-5">
+                <div className="relative w-full">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                        placeholder="Search certificates by patient name, ID, purpose, or doctor..."
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs sm:text-sm font-medium"
+                    />
+                </div>
+            </div>
+
+            {/* 📱 Mobile Card View (< md) */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    <div className="py-10 text-center text-gray-400">Loading certificates...</div>
+                ) : filteredCerts.length === 0 ? (
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-8 text-center text-sm font-medium text-gray-500">No medical certificates found matching your search.</div>
+                ) : filteredCerts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => (
+                    <div key={c.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{c.patient?.full_name || 'N/A'}</h3>
+                                <p className="text-xs text-gray-500 font-mono">ID: {c.patient?.patient_number || 'N/A'}</p>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
+                                {c.period} {c.time_unit}
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Resume Date</span>
+                                <span className="font-semibold text-gray-900 dark:text-white">{new Date(c.resume_date).toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">Dr. {c.doctor?.full_name || 'Staff'}</span>
+                            </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                            <span className="text-xs text-gray-500 font-medium truncate max-w-[180px]">{c.purpose || 'General Medical'}</span>
+                            <div className="flex items-center space-x-1">
+                                <button onClick={() => { setSelectedDoc(c); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => {
+                                    setSelectedDoc(c);
+                                    const { patient, doctor, created_at, updated_at, id, ...formData } = c;
+                                    setForm(formData as any);
+                                    setShowModal(true);
+                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => handleDelete(c.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* 💻 Desktop Table View (>= md) */}
+            <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full text-left border-collapse clinical-table">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
                                 <th className="px-6 py-4">Date</th>
                                 <th className="px-6 py-4">Patient</th>
                                 <th className="px-6 py-4">Period</th>
@@ -229,9 +315,9 @@ export default function MedicalCertificates() {
                         <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
                             {loading ? (
                                 <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">Loading certificates...</td></tr>
-                            ) : certs.length === 0 ? (
-                                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">No medical certificates found.</td></tr>
-                            ) : certs.map(c => (
+                            ) : filteredCerts.length === 0 ? (
+                                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">No medical certificates found matching your search.</td></tr>
+                            ) : filteredCerts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => (
                                 <tr key={c.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition group">
                                     <td className="px-6 py-4 text-sm font-medium text-gray-600 dark:text-gray-400">{new Date(c.report_date).toLocaleDateString()}</td>
                                     <td className="px-6 py-4">
@@ -244,7 +330,7 @@ export default function MedicalCertificates() {
                                     <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 underline font-mono">{c.resume_date ? new Date(c.resume_date).toLocaleDateString() : 'N/A'}</td>
                                     <td className="px-6 py-4 text-sm text-gray-500">Dr. {c.doctor?.full_name}</td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition">
+                                        <div className="flex justify-end gap-2">
                                             <button onClick={() => { setSelectedDoc(c); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
                                             <button onClick={() => {
                                                 setSelectedDoc(c);
@@ -260,6 +346,61 @@ export default function MedicalCertificates() {
                         </tbody>
                     </table>
                 </div>
+                {/* Pagination Controls */}
+                {!loading && certs.length > 0 && (
+                    <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/10">
+                        <div className="flex items-center gap-4">
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, certs.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{certs.length}</span> certificates
+                            </p>
+                            <div className="flex items-center gap-1.5 border-l pl-4 border-gray-200 dark:border-gray-700">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Show</span>
+                                <select
+                                    value={itemsPerPage}
+                                    onChange={(e) => {
+                                        setItemsPerPage(Number(e.target.value));
+                                        setCurrentPage(1);
+                                    }}
+                                    className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                                >
+                                    <option value={10}>10</option>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </div>
+                        </div>
+                        {Math.ceil(certs.length / itemsPerPage) > 1 && (
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                    disabled={currentPage === 1}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex gap-1">
+                                    {Array.from({ length: Math.ceil(certs.length / itemsPerPage) }, (_, i) => i + 1).map(page => (
+                                        <button
+                                            key={page}
+                                            onClick={() => setCurrentPage(page)}
+                                            className={`w-8 h-8 rounded-lg font-bold transition text-xs ${currentPage === page ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent text-gray-600 dark:text-gray-400'}`}
+                                        >
+                                            {page}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(certs.length / itemsPerPage)))}
+                                    disabled={currentPage === Math.ceil(certs.length / itemsPerPage)}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Add/Edit Modal */}

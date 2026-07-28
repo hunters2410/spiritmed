@@ -45,7 +45,7 @@ export function DeceasedPatients() {
     try {
       let query = supabase
         .from('patients')
-        .select('*, invoices(balance)')
+        .select('*, bills(balance)')
         .eq('status', 'deceased')
         .order('deceased_date', { ascending: false });
 
@@ -59,7 +59,7 @@ export function DeceasedPatients() {
       
       const patientsWithDue = (data || []).map((p: any) => ({
         ...p,
-        total_due: p.invoices?.reduce((sum: number, inv: any) => sum + (inv.balance || 0), 0) || 0
+        total_due: p.bills?.reduce((sum: number, inv: any) => sum + (inv.balance || 0), 0) || 0
       }));
 
       setPatients(patientsWithDue);
@@ -268,7 +268,69 @@ export function DeceasedPatients() {
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Total Deceased: {filteredPatients.length}</h2>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+      {/* 📱 Mobile Card View (< md) */}
+      <div className="md:hidden space-y-3">
+        {paginated.length === 0 ? (
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-8 text-center text-sm font-medium text-gray-500 dark:text-gray-400">
+            No deceased patients found
+          </div>
+        ) : (
+          paginated.map((patient) => (
+            <div key={patient.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center text-red-600">
+                    <Skull className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-gray-900 dark:text-white">{patient.full_name}</h3>
+                    <p className="text-xs font-mono text-gray-500">{patient.patient_number}</p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+                  {patient.gender} • {patient.date_of_birth ? `${getAge(patient.date_of_birth)} YRS` : 'N/A'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                <div>
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Contact</span>
+                  <a href={`tel:${patient.phone}`} className="font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1 mt-0.5">
+                    <Phone className="w-3 h-3" />
+                    {patient.phone || 'N/A'}
+                  </a>
+                </div>
+                <div>
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Total Due</span>
+                  <span className={`font-black ${ (patient.total_due || 0) > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                    ${(patient.total_due || 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {patient.deceased_reason && (
+                <div className="text-xs bg-gray-50 dark:bg-gray-900/50 p-2 rounded-lg text-gray-600 dark:text-gray-400">
+                  <span className="font-bold text-[10px] uppercase block text-gray-400">Reason for death</span>
+                  {patient.deceased_reason}
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-end">
+                <button
+                  onClick={() => openViewModal(patient)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-lg text-xs font-bold hover:bg-green-100 transition"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>View Details</span>
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* 💻 Desktop Table View (>= md) */}
+      <div className="hidden md:block bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead className="bg-gray-50 dark:bg-gray-900">
@@ -309,7 +371,7 @@ export function DeceasedPatients() {
                 </tr>
               ) : (
                 paginated.map((patient, idx) => (
-                  <tr key={patient.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                  <tr key={patient.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-400">
                       {(currentPage - 1) * itemsPerPage + idx + 1}
                     </td>

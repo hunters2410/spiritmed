@@ -30,19 +30,19 @@ export function ExpenseCategories() {
 
     useEffect(() => {
         loadCategories();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function loadCategories() {
-        if (!profile?.branch_id) return;
         setLoading(true);
         try {
+            const bid = profile?.branch_id;
             let query = supabase
                 .from('expense_categories')
                 .select('*')
                 .order('name', { ascending: true });
 
-            if (profile.role !== 'super_admin') {
-                query = query.eq('branch_id', profile.branch_id);
+            if (bid) {
+                query = query.eq('branch_id', bid);
             }
 
             const { data, error } = await query;
@@ -57,14 +57,13 @@ export function ExpenseCategories() {
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!profile?.branch_id) return;
         setSubmitting(true);
         setError(null);
         
         try {
             const payload = { 
                 ...formData, 
-                branch_id: profile.branch_id 
+                branch_id: profile?.branch_id || null 
             };
 
             if (editingCat) {
@@ -140,9 +139,9 @@ export function ExpenseCategories() {
 
             <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-widest">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-widest">
                                 <th className="px-6 py-5 text-left font-black border-b border-gray-100 dark:border-gray-700">Category Name</th>
                                 <th className="px-6 py-5 text-left font-black border-b border-gray-100 dark:border-gray-700">Description</th>
                                 <th className="px-6 py-5 text-center font-black border-b border-gray-100 dark:border-gray-700">Actions</th>

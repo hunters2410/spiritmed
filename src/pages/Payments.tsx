@@ -1,81 +1,135 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Search, DollarSign, CreditCard, Banknote, Wallet, X, Printer, Calendar, Filter, ChevronLeft, ChevronRight, FileSpreadsheet, FileJson } from 'lucide-react';
+import { Plus, Search, CreditCard, Banknote, Wallet, X, Printer, Calendar, Filter, ChevronLeft, ChevronRight, FileSpreadsheet, FileJson, Pencil, Trash2 } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 import { ReceiptPrintView } from '../components/ReceiptPrintView';
+import { ApprovalGate, RequestEditModal } from '../components/ApprovalGate';
+import { approvalService, EditApprovalRequest } from '../utils/approvalService';
+import { smsService } from '../utils/smsService';
+import { useToast } from '../contexts/ToastContext';
+import { accountingSync } from '../utils/accountingSync';
+
+
+interface MedicalAid {
+    id: string;
+    name: string;
+}
+
+interface Branch {
+    id: string;
+    name: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    logo_url?: string;
+}
 
 interface Payment {
     id: string;
-    invoice_id: string;
+    bill_id: string;
     amount: number;
     payment_method: string;
     payment_date: string;
+    discount_amount: number;
+    target_portion: 'shortfall' | 'medical_aid';
     notes: string;
-    invoice: {
-        invoice_number: string;
+    bill: {
+        bill_number: string;
         total_amount: number;
         paid_amount: number;
         balance: number;
+        shortfall_amount?: number;
+        medical_aid_amount?: number;
+        shortfall_balance?: number;
+        medical_aid_balance?: number;
         patient: {
             full_name: string;
             patient_number: string;
             email?: string;
+            medical_aid_id?: string | null;
             total_cumulative_balance?: number;
+            medical_aid?: { id: string; name: string } | null;
         };
     };
 }
 
-interface SimpleInvoice {
+interface SimpleBill {
     id: string;
     patient_id: string;
-    invoice_number: string;
+    bill_number: string;
     total_amount: number;
+    discount_amount: number;
+    medical_aid_amount?: number;
+    shortfall_amount?: number;
     paid_amount: number;
+    shortfall_balance?: number;
+    medical_aid_balance?: number;
     balance: number;
     status: string;
     patient: {
         full_name: string;
+        medical_aid_id?: string | null;
+        medical_aid?: {
+            id: string;
+            name: string;
+        } | null;
     };
 }
 
 export function Payments() {
     const { profile } = useAuth();
+    const { showToast } = useToast();
     const [payments, setPayments] = useState<Payment[]>([]);
-    const [invoices, setInvoices] = useState<SimpleInvoice[]>([]);
+    const [bills, setBills] = useState<SimpleBill[]>([]);
+    const [medicalAids, setMedicalAids] = useState<MedicalAid[]>([]);
+    const [filterMedicalAid, setFilterMedicalAid] = useState('all');
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
+    const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
     const [showPrintView, setShowPrintView] = useState(false);
     const [selectedPaymentForPrint, setSelectedPaymentForPrint] = useState<Payment | null>(null);
-    const [branch, setBranch] = useState<any>(null);
+    const [branch, setBranch] = useState<Branch | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterMethod, setFilterMethod] = useState('all');
     const [filterDebtors, setFilterDebtors] = useState(false);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const [timeRange, setTimeRange] = useState('all');
     const [currentPage, setCurrentPage] = useState(1);
-    const [invoiceSearch, setInvoiceSearch] = useState('');
+    const [billSearch, setBillSearch] = useState('');
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [itemsPerPage, setItemsPerPage] = useState(25);
 
+    // Approval gate state (accountant edit flow)
+    const [pendingEditPayment, setPendingEditPayment] = useState<Payment | null>(null);
+    const [showRequestModal, setShowRequestModal] = useState(false);
+    const [approvalRequest, setApprovalRequest] = useState<EditApprovalRequest | null>(null);
+    const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+    const isAccountant = profile?.role === 'accountant';
+
     const [formData, setFormData] = useState({
-        invoice_id: '',
+        bill_id: '',
+        payment_date: new Date().toISOString().split('T')[0],
         amount: '',
+        discount: '0',
         payment_method: 'cash',
+        target_portion: 'shortfall' as 'shortfall' | 'medical_aid',
         notes: ''
     });
 
     useEffect(() => {
         loadPayments();
-        loadUnpaidInvoices();
+        loadUnpaidBills();
         loadBranch();
+        loadMedicalAids();
 
-        // Check for invoiceId in URL
+        // Check for billId in URL
         const params = new URLSearchParams(window.location.search);
-        const invoiceId = params.get('invoiceId');
-        if (invoiceId) {
-            setFormData(prev => ({ ...prev, invoice_id: invoiceId }));
+        const billId = params.get('billId');
+        if (billId) {
+            setFormData(prev => ({ ...prev, bill_id: billId }));
             setShowModal(true);
         }
     }, [profile]);
@@ -94,6 +148,36 @@ export function Payments() {
             console.error('Error loading branch:', error);
         }
     };
+    
+    const loadMedicalAids = async () => {
+        try {
+            const { data, error } = await supabase
+                .from('medical_aids')
+                .select('*')
+                .order('name');
+            if (error) throw error;
+            setMedicalAids(data || []);
+        } catch (error) {
+            console.error('Error loading medical aids:', error);
+        }
+    };
+    
+    const handleTimeRangeChange = (range: string) => {
+        setTimeRange(range);
+        if (range === 'all') {
+            setStartDate('');
+            setEndDate('');
+            return;
+        }
+
+        const end = new Date();
+        const start = new Date();
+        start.setDate(end.getDate() - parseInt(range));
+        
+        setStartDate(start.toISOString().split('T')[0]);
+        setEndDate(end.toISOString().split('T')[0]);
+        setCurrentPage(1);
+    };
 
     const loadPayments = async () => {
         try {
@@ -101,12 +185,16 @@ export function Payments() {
                 .from('payments')
                 .select(`
           *,
-          invoice:invoices(
-            invoice_number,
+          bill:bills(
+            bill_number,
             total_amount,
             paid_amount,
             balance,
-            patient:patients(full_name, patient_number, email, invoices(balance))
+            shortfall_amount,
+            medical_aid_amount,
+            shortfall_balance,
+            medical_aid_balance,
+            patient:patients(full_name, patient_number, email, medical_aid_id, outstanding_balance, medical_aid:medical_aids(id, name))
           )
         `)
                 .order('payment_date', { ascending: false });
@@ -120,11 +208,11 @@ export function Payments() {
             
             const structuredData = (data || []).map((p: any) => ({
                 ...p,
-                invoice: {
-                    ...p.invoice,
+                bill: {
+                    ...p.bill,
                     patient: {
-                        ...p.invoice?.patient,
-                        total_cumulative_balance: p.invoice?.patient?.invoices?.reduce((sum: number, i: any) => sum + (i.balance || 0), 0) || 0
+                        ...p.bill?.patient,
+                        total_cumulative_balance: p.bill?.patient?.outstanding_balance ?? 0
                     }
                 }
             }));
@@ -140,41 +228,45 @@ export function Payments() {
     const handleExportExcel = () => {
         const data = filteredPayments.map(p => ({
             'Date': new Date(p.payment_date).toLocaleString(),
-            'Patient': p.invoice?.patient?.full_name,
-            'Invoice #': p.invoice?.invoice_number,
+            'Patient': p.bill?.patient?.full_name,
+            'INV #': p.bill?.bill_number,
             'Amount': p.amount,
-            'Method': p.payment_method,
+            'Method': p.payment_method === 'medical_aid' ? (p.bill?.patient?.medical_aid?.name || 'Medical Aid') : (p.payment_method === 'standard' ? 'Cash' : p.payment_method),
             'Notes': p.notes
         }));
         exportToExcel(data, 'spiritmed_payments');
     };
 
     const handleExportPDF = () => {
-        const headers = ['#', 'Date', 'Patient', 'Invoice', 'Amount', 'Method'];
+        const headers = ['#', 'Date', 'Patient', 'Bill', 'Amount', 'Method'];
         const data = filteredPayments.map((p, i) => [
             i + 1,
             new Date(p.payment_date).toLocaleDateString(),
-            p.invoice?.patient?.full_name || 'N/A',
-            p.invoice?.invoice_number,
+            p.bill?.patient?.full_name || 'N/A',
+            p.bill?.bill_number,
             `$${p.amount.toLocaleString()}`,
-            p.payment_method.toUpperCase()
+            p.payment_method === 'medical_aid' ? (p.bill?.patient?.medical_aid?.name || 'MEDICAL AID') : (p.payment_method === 'standard' ? 'CASH' : p.payment_method.toUpperCase())
         ]);
         exportToPDF(headers, data, 'Spiritmed Payment History', 'spiritmed_payments');
     };
 
-    const loadUnpaidInvoices = async () => {
+    const loadUnpaidBills = async () => {
         try {
             let query = supabase
-                .from('invoices')
+                .from('bills')
                 .select(`
           id, 
           patient_id,
-          invoice_number, 
+          bill_number, 
           total_amount, 
           paid_amount,
           balance,
+          shortfall_amount,
+          medical_aid_amount,
+          shortfall_balance,
+          medical_aid_balance,
           status,
-          patient:patients(full_name)
+          patient:patients(full_name, medical_aid:medical_aids(id, name))
         `)
                 .in('status', ['unpaid', 'partially_paid']);
 
@@ -184,10 +276,152 @@ export function Payments() {
 
             const { data, error } = await query;
             if (error) throw error;
-            setInvoices((data || []) as unknown as SimpleInvoice[]);
+            setBills((data || []) as unknown as SimpleBill[]);
         } catch (error) {
             console.error('Error loading invoices:', error);
         }
+    };
+
+    const handleDeletePayment = async (payment: Payment) => {
+        if (!window.confirm('Are you sure you want to delete this payment? This will revert the bill balance.')) return;
+
+        try {
+            setLoading(true);
+            
+            // 1. Get current bill state
+            const { data: bill, error: billFetchError } = await supabase
+                .from('bills')
+                .select('*')
+                .eq('id', payment.bill_id)
+                .single();
+            
+            if (billFetchError) throw billFetchError;
+
+            // 2. Revert bill amounts
+            // Note: Since discount reduces total_amount, we add it back
+            const newTotalAmount = (bill.total_amount || 0) + (payment.discount_amount || 0);
+            const newDiscountAmount = Math.max(0, (bill.discount_amount || 0) - (payment.discount_amount || 0));
+            const newPaidAmount = Math.max(0, (bill.paid_amount || 0) - payment.amount);
+            const newBalance = Math.max(0, newTotalAmount - newPaidAmount);
+            
+            const newStatus = newBalance <= 0 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'unpaid';
+
+            // Revert balances
+            let newShortfallBalance = bill.shortfall_balance || 0;
+            let newMedicalAidBalance = bill.medical_aid_balance || 0;
+
+            if (payment.target_portion === 'shortfall') {
+                newShortfallBalance += (payment.amount + (payment.discount_amount || 0));
+            } else {
+                newMedicalAidBalance += (payment.amount + (payment.discount_amount || 0));
+            }
+
+            const { error: billUpdateError } = await supabase
+                .from('bills')
+                .update({
+                    total_amount: newTotalAmount,
+                    discount_amount: newDiscountAmount,
+                    paid_amount: newPaidAmount,
+                    balance: newBalance,
+                    shortfall_balance: newShortfallBalance,
+                    medical_aid_balance: newMedicalAidBalance,
+                    status: newStatus
+                })
+                .eq('id', payment.bill_id);
+
+            if (billUpdateError) throw billUpdateError;
+
+            // 3. Delete payment record
+            const { error: deleteError } = await supabase
+                .from('payments')
+                .delete()
+                .eq('id', payment.id);
+
+            if (deleteError) throw deleteError;
+
+            await accountingSync.deleteJournalEntry('payment', payment.id, profile?.branch_id || '');
+
+            if (profile?.id && profile?.branch_id) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id,
+                    action: 'DELETE',
+                    tableName: 'payments',
+                    recordId: payment.id,
+                    details: `Deleted payment of ${payment.amount} for bill ${payment.bill?.bill_number}`
+                });
+            }
+
+            showToast('Payment deleted and balance reverted');
+            loadPayments();
+            loadUnpaidBills();
+        } catch (error: any) {
+            console.error('Error deleting payment:', error);
+            showToast(error.message || 'Failed to delete payment', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleEditPayment = (payment: Payment) => {
+        if (isAccountant) {
+            // Accountants must request approval first
+            setPendingEditPayment(payment);
+            setShowRequestModal(true);
+        } else {
+            // Admins/super_admins can edit directly
+            openEditModal(payment);
+        }
+    };
+
+    const openEditModal = (payment: Payment) => {
+        setEditingPaymentId(payment.id);
+        const method = payment.payment_method === 'bank_transfer' ? 'eft' : payment.payment_method;
+        setFormData({
+            bill_id: payment.bill_id,
+            payment_date: payment.payment_date ? new Date(payment.payment_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            amount: payment.amount.toString(),
+            discount: (payment.discount_amount || 0).toString(),
+            payment_method: method,
+            target_portion: payment.target_portion || 'shortfall',
+            notes: payment.notes || ''
+        });
+        setBillSearch(`${payment.bill?.bill_number} - ${payment.bill?.patient?.full_name}`);
+        setShowModal(true);
+    };
+
+    const handleApprovalSubmit = async (reason: string) => {
+        if (!pendingEditPayment || !profile?.branch_id) return;
+        setIsSubmittingApproval(true);
+        const context = `Payment of $${pendingEditPayment.amount.toLocaleString()} — ${pendingEditPayment.bill?.bill_number || ''} (${pendingEditPayment.bill?.patient?.full_name || 'Unknown Patient'})`;
+        const request = await approvalService.requestApproval({
+            branchId: profile.branch_id,
+            requestorId: profile.id,
+            requestorName: profile.full_name,
+            recordType: 'payment',
+            recordId: pendingEditPayment.id,
+            recordContext: context,
+            reason,
+        });
+        setIsSubmittingApproval(false);
+        if (request) {
+            setShowRequestModal(false);
+            setApprovalRequest(request);
+        } else {
+            showToast('Failed to send approval request. Please try again.', 'error');
+        }
+    };
+
+    const handleApprovalGranted = () => {
+        if (pendingEditPayment) openEditModal(pendingEditPayment);
+        setApprovalRequest(null);
+        setPendingEditPayment(null);
+    };
+
+    const handleApprovalDismissed = (msg?: string) => {
+        setApprovalRequest(null);
+        setPendingEditPayment(null);
+        if (msg) showToast(msg, 'warning');
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -195,67 +429,225 @@ export function Payments() {
         try {
             setLoading(true);
             const amount = parseFloat(formData.amount);
+            const discount = parseFloat(formData.discount) || 0;
 
-            const selectedInvoice = invoices.find(inv => inv.id === formData.invoice_id);
-            if (!selectedInvoice) throw new Error('Selected invoice not found');
+            const selectedBill = bills.find(inv => inv.id === formData.bill_id);
+            if (!selectedBill && !editingPaymentId) throw new Error('Selected bill not found');
 
-            // 1. Record Payment
-            const { data: paymentData, error: paymentError } = await supabase
-                .from('payments')
-                .insert([{
-                    ...formData,
-                    payment_method: formData.payment_method === 'eft' ? 'bank_transfer' : formData.payment_method,
-                    amount,
-                    patient_id: selectedInvoice.patient_id,
-                    payment_date: new Date().toISOString(),
-                    branch_id: profile?.branch_id,
-                    received_by: profile?.id
-                }])
-                .select()
-                .single();
+            // Overpayment guard (create only)
+            if (!editingPaymentId && selectedBill) {
+                if (amount > (selectedBill.balance || 0) + 0.01) {
+                    throw new Error(`Payment amount ($${amount.toLocaleString()}) exceeds the remaining bill balance ($${(selectedBill.balance || 0).toLocaleString()})`);
+                }
+            }
+
+            let paymentData: any;
+            let paymentError: any;
+
+            if (editingPaymentId) {
+                // UPDATE logic
+                const originalPayment = payments.find(p => p.id === editingPaymentId);
+                if (!originalPayment) throw new Error('Original payment not found');
+
+                const { data: currentBill, error: billFetchError } = await supabase
+                    .from('bills')
+                    .select('*')
+                    .eq('id', originalPayment.bill_id)
+                    .single();
+                
+                if (billFetchError) throw billFetchError;
+
+                const amountDiff = amount - originalPayment.amount;
+                const discountDiff = discount - (originalPayment.discount_amount || 0);
+
+                const newTotalAmount = Math.max(0, (currentBill.total_amount || 0) - discountDiff);
+                const newDiscountAmount = Math.max(0, (currentBill.discount_amount || 0) + discountDiff);
+                const newPaidAmount = (currentBill.paid_amount || 0) + amountDiff;
+                const newBalance = Math.max(0, newTotalAmount - newPaidAmount);
+                const newStatus = newBalance <= 0 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'unpaid';
+
+                // Revert old payment influence
+                let currentSF = currentBill.shortfall_balance ?? 0;
+                let currentMA = currentBill.medical_aid_balance ?? 0;
+
+                // Fallback for uninitialized older bills
+                if (currentSF === 0 && currentMA === 0 && (currentBill.balance || 0) > 0) {
+                    currentSF = currentBill.shortfall_amount || 0;
+                    currentMA = currentBill.medical_aid_amount || 0;
+                }
+
+                let newShortfallBalance = currentSF;
+                let newMedicalAidBalance = currentMA;
+
+                // Revert old payment influence
+                // For split bills, discount always came off shortfall — revert that way
+                const wasSplitBill = (currentBill.medical_aid_amount || 0) > 0;
+                if (originalPayment.target_portion === 'shortfall') {
+                    newShortfallBalance += (originalPayment.amount + (originalPayment.discount_amount || 0));
+                } else {
+                    // MA payment: only the amount reduced MA balance; discount reduced SF balance
+                    newMedicalAidBalance += originalPayment.amount;
+                    if (wasSplitBill) {
+                        newShortfallBalance += (originalPayment.discount_amount || 0);
+                    } else {
+                        newMedicalAidBalance += (originalPayment.discount_amount || 0);
+                    }
+                }
+
+                // Apply new payment influence
+                const isSplitBill = (currentBill.medical_aid_amount || 0) > 0;
+                if (formData.target_portion === 'shortfall') {
+                    newShortfallBalance -= (amount + discount);
+                } else {
+                    // MA payment: amount reduces MA balance; discount always reduces SF on split bills
+                    newMedicalAidBalance -= amount;
+                    if (isSplitBill) {
+                        newShortfallBalance -= discount;
+                    } else {
+                        newMedicalAidBalance -= discount;
+                    }
+                }
+
+                await supabase.from('bills').update({
+                    total_amount: newTotalAmount,
+                    discount_amount: newDiscountAmount,
+                    paid_amount: newPaidAmount,
+                    balance: newBalance,
+                    shortfall_balance: Math.max(0, newShortfallBalance),
+                    medical_aid_balance: Math.max(0, newMedicalAidBalance),
+                    status: newStatus
+                }).eq('id', currentBill.id);
+
+                const { data, error } = await supabase
+                    .from('payments')
+                    .update({
+                        amount,
+                        discount_amount: discount,
+                        payment_method: formData.payment_method === 'eft' ? 'bank_transfer' : formData.payment_method,
+                        payment_date: formData.payment_date || new Date().toISOString(),
+                        notes: formData.notes
+                    })
+                    .eq('id', editingPaymentId)
+                    .select()
+                    .single();
+                
+                paymentData = data;
+                paymentError = error;
+            } else {
+                // CREATE logic
+                const { data, error } = await supabase
+                    .from('payments')
+                    .insert([{
+                        bill_id: formData.bill_id,
+                        amount,
+                        discount_amount: discount,
+                        payment_method: formData.payment_method === 'eft' ? 'bank_transfer' : formData.payment_method,
+                        target_portion: formData.target_portion,
+                        patient_id: selectedBill!.patient_id,
+                        notes: formData.notes,
+                        payment_date: formData.payment_date || new Date().toISOString(),
+                        branch_id: profile?.branch_id,
+                        received_by: profile?.id
+                    }])
+                    .select()
+                    .single();
+                
+                paymentData = data;
+                paymentError = error;
+
+                if (!paymentError) {
+                    const newTotalAmount = Math.max(0, (selectedBill!.total_amount || 0) - discount);
+                    const newDiscountAmount = (selectedBill!.discount_amount || 0) + discount;
+                    const newPaidAmount = (selectedBill!.paid_amount || 0) + amount;
+                    const newBalance = Math.max(0, newTotalAmount - newPaidAmount);
+                    
+                    let newStatus = newBalance <= 0 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'unpaid';
+
+                    // Update MA/SF balances
+                    let currentSF = selectedBill!.shortfall_balance ?? 0;
+                    let currentMA = selectedBill!.medical_aid_balance ?? 0;
+
+                    // Fallback for older bills
+                    if (currentSF === 0 && currentMA === 0 && (selectedBill!.balance || 0) > 0) {
+                        currentSF = selectedBill!.shortfall_amount || 0;
+                        currentMA = selectedBill!.medical_aid_amount || 0;
+                    }
+
+                    let newShortfallBalance = currentSF;
+                    let newMedicalAidBalance = currentMA;
+
+                    const isSplitBill = (selectedBill!.medical_aid_amount || 0) > 0;
+
+                    if (formData.target_portion === 'shortfall') {
+                        // Shortfall payment: both amount and discount reduce the shortfall balance
+                        newShortfallBalance = Math.max(0, newShortfallBalance - (amount + discount));
+                    } else {
+                        // Medical Aid payment: amount reduces MA balance
+                        // Discount ALWAYS goes to patient shortfall on split bills
+                        newMedicalAidBalance = Math.max(0, newMedicalAidBalance - amount);
+                        if (isSplitBill) {
+                            newShortfallBalance = Math.max(0, newShortfallBalance - discount);
+                        } else {
+                            // Patient-only bill: discount reduces MA balance (no split)
+                            newMedicalAidBalance = Math.max(0, newMedicalAidBalance - discount);
+                        }
+                    }
+
+                    await supabase.from('bills').update({ 
+                        total_amount: newTotalAmount,
+                        discount_amount: newDiscountAmount,
+                        paid_amount: newPaidAmount,
+                        balance: newBalance,
+                        shortfall_balance: newShortfallBalance,
+                        medical_aid_balance: newMedicalAidBalance,
+                        status: newStatus 
+                    }).eq('id', formData.bill_id);
+
+                    // SEND SMS: Payment Received
+                    const patient = selectedBill?.patient;
+                    if (patient && (patient as any).phone && profile?.branch_id) {
+                       await smsService.sendSms({
+                           recipientPhone: (patient as any).phone,
+                           triggerType: 'payment_received',
+                           variables: {
+                               patient_name: patient.full_name,
+                               amount: amount.toLocaleString(),
+                               bill_number: selectedBill!.bill_number,
+                               balance: newBalance.toLocaleString()
+                           },
+                           branchId: profile.branch_id,
+                           patientId: selectedBill!.patient_id
+                       });
+                    }
+                }
+            }
 
             if (paymentError) throw paymentError;
 
+            if (paymentData) {
+                await accountingSync.postPaymentJournalEntry(paymentData);
+            }
+
             if (profile?.id && profile?.branch_id && paymentData) {
-                const selectedInvoice = invoices.find(inv => inv.id === formData.invoice_id);
-                const patientName = selectedInvoice?.patient?.full_name || 'Unknown Patient';
                 await logActivity(supabase, {
                     userId: profile.id,
                     branchId: profile.branch_id,
-                    action: 'CREATE',
+                    action: editingPaymentId ? 'UPDATE' : 'CREATE',
                     tableName: 'payments',
                     recordId: paymentData.id,
-                    details: `Recorded payment of ${amount} for invoice ${selectedInvoice?.invoice_number || ''} (Patient: ${patientName})`,
-                    newValues: { ...formData, amount, payment_date: paymentData.payment_date }
+                    details: `${editingPaymentId ? 'Updated' : 'Recorded'} payment of ${amount} (Discount: ${discount})`,
+                    newValues: { ...formData, amount, discount, payment_date: paymentData.payment_date }
                 });
             }
-
-            // 2. Update Invoice Fields (paid_amount, balance, status)
-            const newPaidAmount = (selectedInvoice.paid_amount || 0) + amount;
-            const newBalance = selectedInvoice.total_amount - newPaidAmount;
-            
-            let newStatus = 'partially_paid';
-            if (newPaidAmount >= selectedInvoice.total_amount) {
-                newStatus = 'paid';
-            }
-
-            await supabase
-                .from('invoices')
-                .update({ 
-                    paid_amount: newPaidAmount,
-                    balance: newBalance,
-                    status: newStatus 
-                })
-                .eq('id', formData.invoice_id);
 
             setShowModal(false);
             resetForm();
             loadPayments();
-            loadUnpaidInvoices();
-            alert('Payment recorded successfully!');
-        } catch (error) {
+            loadUnpaidBills();
+            showToast(editingPaymentId ? 'Payment updated successfully!' : 'Payment recorded successfully!');
+        } catch (error: any) {
             console.error('Error recording payment:', error);
-            alert('Failed to record payment');
+            showToast(error.message || 'Failed to record payment', 'error');
         } finally {
             setLoading(false);
         }
@@ -263,32 +655,38 @@ export function Payments() {
 
     const resetForm = () => {
         setFormData({
-            invoice_id: '',
+            bill_id: '',
+            payment_date: new Date().toISOString().split('T')[0],
             amount: '',
+            discount: '0',
             payment_method: 'cash',
+            target_portion: 'shortfall',
             notes: ''
         });
-        setInvoiceSearch('');
+        setBillSearch('');
+        setEditingPaymentId(null);
+        setIsDropdownOpen(false);
     };
 
-    const filteredPayments = payments.filter(p => {
-        const matchesSearch = (p.invoice?.patient?.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (p.invoice?.invoice_number || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const filteredPayments = useMemo(() => payments.filter(p => {
+        const matchesSearch = (p.bill?.patient?.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (p.bill?.bill_number || '').toLowerCase().includes(searchQuery.toLowerCase());
         
         const matchesMethod = filterMethod === 'all' || p.payment_method === filterMethod;
-        const matchesDebtor = !filterDebtors || (p.invoice?.patient?.total_cumulative_balance || 0) > 0;
+        const matchesDebtor = !filterDebtors || (p.bill?.patient?.total_cumulative_balance || 0) > 0;
         
         const payDate = new Date(p.payment_date);
         const matchesStartDate = !startDate || payDate >= new Date(startDate);
         const matchesEndDate = !endDate || payDate <= new Date(endDate);
+        const matchesMedicalAid = filterMedicalAid === 'all' || p.bill?.patient?.medical_aid_id === filterMedicalAid;
 
-        return matchesSearch && matchesMethod && matchesDebtor && matchesStartDate && matchesEndDate;
-    });
+        return matchesSearch && matchesMethod && matchesDebtor && matchesStartDate && matchesEndDate && matchesMedicalAid;
+    }), [payments, searchQuery, filterMethod, filterDebtors, startDate, endDate, filterMedicalAid]);
 
-    const filteredInvoices = invoices.filter(inv => 
-        inv.invoice_number.toLowerCase().includes(invoiceSearch.toLowerCase()) ||
-        inv.patient?.full_name.toLowerCase().includes(invoiceSearch.toLowerCase())
-    );
+    const filteredBills = useMemo(() => bills.filter(inv => 
+        inv.bill_number.toLowerCase().includes(billSearch.toLowerCase()) ||
+        inv.patient?.full_name.toLowerCase().includes(billSearch.toLowerCase())
+    ), [bills, billSearch]);
 
     const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
     const paginated = filteredPayments.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -305,162 +703,223 @@ export function Payments() {
 
     return (
         <div className="space-y-6">
+            {/* ── Accountant Edit Approval Flow ────────────────────────────────── */}
+            {showRequestModal && pendingEditPayment && (
+                <RequestEditModal
+                    recordType="payment"
+                    recordContext={`Payment of $${pendingEditPayment.amount.toLocaleString()} — ${pendingEditPayment.bill?.bill_number || ''} (${pendingEditPayment.bill?.patient?.full_name || ''})`}
+                    onSubmit={handleApprovalSubmit}
+                    onCancel={() => { setShowRequestModal(false); setPendingEditPayment(null); }}
+                    isSubmitting={isSubmittingApproval}
+                />
+            )}
+            {approvalRequest && (
+                <ApprovalGate
+                    request={approvalRequest}
+                    onApproved={handleApprovalGranted}
+                    onDenied={handleApprovalDismissed}
+                    onCancelled={() => handleApprovalDismissed()}
+                />
+            )}
+            {/* ─────────────────────────────────────────────────────────────────── */}
+
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                        <DollarSign className="w-8 h-8 text-cyan-600" />
-                        Revenue & Payments
-                    </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-1">Track payments and financial transactions</p>
+                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Revenue &amp; Payments</h1>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Track payments and financial transactions</p>
                 </div>
-                <button
-                    onClick={() => setShowModal(true)}
-                    className="flex items-center space-x-2 bg-cyan-600 text-white px-4 py-2 rounded-lg hover:bg-cyan-700 transition shadow-md"
-                >
-                    <Plus className="w-5 h-5" />
-                    <span>Record Payment</span>
+                <button onClick={() => setShowModal(true)} className="flex items-center gap-2 bg-cyan-600 text-white px-5 py-2.5 rounded-lg hover:bg-cyan-700 transition font-semibold text-sm shadow">
+                    <Plus className="w-4 h-4" /> Record Payment
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="md:col-span-2 relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                    <input
-                        type="text"
-                        placeholder="Search transactions..."
-                        value={searchQuery}
-                        onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-                        className="w-full pl-9 pr-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-cyan-500"
-                    />
-                </div>
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => setFilterDebtors(!filterDebtors)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition shadow-sm ${filterDebtors ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}
-                    >
-                        <Filter className="w-4 h-4" />
-                        <span>{filterDebtors ? 'Showing Patients with Dues' : 'All Patients'}</span>
-                    </button>
-                    <select
-                        value={filterMethod}
-                        onChange={(e) => { setFilterMethod(e.target.value); setCurrentPage(1); }}
-                        className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-cyan-500 font-bold text-gray-600"
-                    >
-                        <option value="all">All Methods</option>
-                        <option value="cash">Cash</option>
-                        <option value="card">Card</option>
-                        <option value="eft">EFT / Transfer</option>
-                        <option value="wallet">Mobile Wallet</option>
-                    </select>
-                    <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-lg p-1 shrink-0">
-                        <button
-                            onClick={handleExportExcel}
-                            className="p-2 text-green-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
-                            title="Export to Excel"
-                        >
-                            <FileSpreadsheet className="w-4 h-4" />
-                        </button>
-                        <button
-                            onClick={handleExportPDF}
-                            className="p-2 text-red-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
-                            title="Export to PDF"
-                        >
-                            <FileJson className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-                <div className="flex gap-2">
-                    <div className="relative flex-1">
-                        <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-3 h-3" />
+            {/* Filter Bar */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                    {/* Search - 3 cols */}
+                    <div className="md:col-span-3 relative">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                         <input
-                            type="date"
-                            value={startDate}
-                            onChange={(e) => { setStartDate(e.target.value); setCurrentPage(1); }}
-                            className="w-full pl-8 pr-2 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 shadow-sm"
+                            type="text"
+                            placeholder="Search Patients..."
+                            value={searchQuery}
+                            onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                            className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs outline-none focus:ring-2 focus:ring-cyan-500 transition-all font-medium"
                         />
                     </div>
-                    <div className="relative flex-1">
-                        <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-3 h-3" />
-                        <input
-                            type="date"
-                            value={endDate}
-                            onChange={(e) => { setEndDate(e.target.value); setCurrentPage(1); }}
-                            className="w-full pl-8 pr-2 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 shadow-sm"
-                        />
+
+                    {/* Method & Medical Aid - 3 cols */}
+                    <div className="md:col-span-3 grid grid-cols-2 gap-2">
+                        <select
+                            value={filterMethod}
+                            onChange={(e) => { setFilterMethod(e.target.value); setCurrentPage(1); }}
+                            className="px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 font-bold text-gray-600"
+                        >
+                            <option value="all">Methods</option>
+                            <option value="cash">Cash</option>
+                            <option value="card">Card</option>
+                            <option value="eft">EFT</option>
+                        </select>
+                        <select
+                            value={filterMedicalAid}
+                            onChange={(e) => { setFilterMedicalAid(e.target.value); setCurrentPage(1); }}
+                            className="px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 font-bold text-gray-600"
+                        >
+                            <option value="all">Insurers</option>
+                            {medicalAids.map(aid => (
+                                <option key={aid.id} value={aid.id}>{aid.name}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* Range Preset - 2 cols */}
+                    <div className="md:col-span-2">
+                        <select
+                            value={timeRange}
+                            onChange={(e) => handleTimeRangeChange(e.target.value)}
+                            className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 font-bold text-gray-600"
+                        >
+                            <option value="all">Time Range</option>
+                            <option value="7">Last 7 Days</option>
+                            <option value="14">Last 14 Days</option>
+                            <option value="21">Last 21 Days</option>
+                            <option value="30">Last 30 Days</option>
+                            <option value="60">Last 60 Days</option>
+                            <option value="90">Last 90 Days</option>
+                            <option value="custom" disabled>Custom Range</option>
+                        </select>
+                    </div>
+
+                    {/* Custom Dates - 4 cols */}
+                    <div className="md:col-span-4 flex gap-2">
+                        <div className="relative flex-1">
+                            <Calendar className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 w-3 h-3" />
+                            <input
+                                type="date"
+                                value={startDate}
+                                onChange={(e) => { setStartDate(e.target.value); setTimeRange('custom'); setCurrentPage(1); }}
+                                className="w-full pl-7 pr-1 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 font-bold"
+                            />
+                        </div>
+                        <div className="relative flex-1">
+                            <Calendar className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 w-3 h-3" />
+                            <input
+                                type="date"
+                                value={endDate}
+                                onChange={(e) => { setEndDate(e.target.value); setTimeRange('custom'); setCurrentPage(1); }}
+                                className="w-full pl-7 pr-1 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-[10px] outline-none focus:ring-2 focus:ring-cyan-500 font-bold"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                {/* Second row: Buttons & Export */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setFilterDebtors(!filterDebtors)}
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition shadow-sm ${filterDebtors ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'}`}
+                        >
+                            <Filter className="w-3.5 h-3.5" />
+                            <span>{filterDebtors ? 'Showing Patients with Dues' : 'All Patients'}</span>
+                        </button>
+                        
+                        {(searchQuery || filterMethod !== 'all' || filterMedicalAid !== 'all' || startDate || endDate || filterDebtors) && (
+                            <button
+                                onClick={() => {
+                                    setSearchQuery('');
+                                    setFilterMethod('all');
+                                    setFilterMedicalAid('all');
+                                    setStartDate('');
+                                    setEndDate('');
+                                    setTimeRange('all');
+                                    setFilterDebtors(false);
+                                    setCurrentPage(1);
+                                }}
+                                className="text-xs text-gray-400 hover:text-rose-500 font-bold flex items-center gap-1 px-2"
+                            >
+                                <X className="w-3 h-3" /> Clear Filters
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] items-center uppercase font-black text-gray-400 mr-2 tracking-widest hidden sm:block">Export Options</span>
+                        <div className="flex bg-gray-100 dark:bg-gray-700/50 rounded-lg p-1">
+                            <button
+                                onClick={handleExportExcel}
+                                className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-green-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+                            >
+                                <FileSpreadsheet className="w-4 h-4" />
+                                <span>Excel</span>
+                            </button>
+                            <button
+                                onClick={handleExportPDF}
+                                className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-white dark:hover:bg-gray-600 rounded-md transition"
+                            >
+                                <FileJson className="w-4 h-4" />
+                                <span>PDF</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+                    <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
+                        <thead className="bg-gray-100 dark:bg-gray-900 border-b border-gray-300 dark:border-gray-700">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700">Date/Time</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700">Patient</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-amber-600 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700 font-sans">Patient Debt</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700">Invoice #</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700 font-sans">Total Bill</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700 font-sans">Payment</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700 font-sans">Bal. After</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700">Method</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-r border-b border-gray-200 dark:border-gray-700">Notes</th>
-                                <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">Actions</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Date</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Patient</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">INV #</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-right text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Bill Total</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-right text-xs font-bold text-cyan-600 uppercase tracking-wider">Payment</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-right text-xs font-bold text-amber-500 uppercase tracking-wider">Discount</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-right text-xs font-bold text-orange-600 uppercase tracking-wider">Balance</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Method</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Notes</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-center text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        <tbody>
                             {filteredPayments.length === 0 ? (
-                                <tr>
-                                    <td colSpan={10} className="px-6 py-12 text-center text-gray-500">No payments found</td>
-                                </tr>
+                                <tr><td colSpan={10} className="border border-gray-200 dark:border-gray-700 px-5 py-16 text-center text-sm font-medium text-gray-400">No payments found</td></tr>
                             ) : (
                                 paginated.map((p) => (
-                                    <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
-                                        <td className="px-6 py-4 text-xs text-gray-500 border-r border-b border-gray-200 dark:border-gray-700">
-                                            {new Date(p.payment_date).toLocaleString()}
+                                    <tr key={p.id} className="hover:bg-cyan-50/40 dark:hover:bg-cyan-900/10 transition">
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-sm text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                                            {new Date(p.payment_date).toLocaleDateString()}
+                                            <div className="text-xs text-gray-400">{new Date(p.payment_date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
                                         </td>
-                                        <td className="px-6 py-4 border-r border-b border-gray-200 dark:border-gray-700">
-                                            <div className="text-[10px] text-gray-400 font-mono tracking-tighter">{p.invoice?.patient?.patient_number}</div>
-                                            <div className="text-sm font-medium text-gray-900 dark:text-white">{p.invoice?.patient?.full_name}</div>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5">
+                                            <div className="text-sm font-semibold text-gray-900 dark:text-white">{p.bill?.patient?.full_name}</div>
+                                            <div className="text-xs text-gray-400 font-mono">{p.bill?.patient?.patient_number}</div>
                                         </td>
-                                        <td className="px-6 py-4 border-r border-b border-gray-200 dark:border-gray-700">
-                                            <div className="text-sm font-black text-amber-600">${(p.invoice?.patient?.total_cumulative_balance || 0).toLocaleString()}</div>
-                                            <div className="text-[10px] text-gray-400 uppercase font-bold">Total Remaining</div>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">{p.bill?.bill_number}</td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right text-sm font-semibold text-gray-600 dark:text-gray-300">${(p.bill?.total_amount || 0).toLocaleString()}</td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right"><span className="text-sm font-bold text-cyan-600">${p.amount.toLocaleString()}</span></td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right"><span className="text-sm font-semibold text-amber-600">${(p.discount_amount || 0).toLocaleString()}</span></td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right">
+                                            {(p.bill?.balance || 0) > 0
+                                                ? <span className="text-sm font-bold text-orange-600">${(p.bill?.balance || 0).toLocaleString()}</span>
+                                                : <span className="text-sm font-bold text-green-600">Settled</span>}
                                         </td>
-                                        <td className="px-6 py-4 font-mono text-sm text-gray-600 border-r border-b border-gray-200 dark:border-gray-700">
-                                            {p.invoice?.invoice_number}
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5">
+                                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 uppercase border border-gray-200">
+                                                {(p.payment_method === 'cash' || p.payment_method === 'standard') ? <Banknote className="w-3 h-3 text-green-600" /> : p.payment_method === 'card' ? <CreditCard className="w-3 h-3 text-blue-600" /> : <Wallet className="w-3 h-3 text-purple-600" />}
+                                                {p.payment_method === 'medical_aid' ? (p.bill?.patient?.medical_aid?.name || 'Medical Aid') : (p.payment_method === 'standard' || !p.payment_method) ? 'Cash' : p.payment_method.replace('_', ' ')}
+                                            </span>
                                         </td>
-                                        <td className="px-6 py-4 border-r border-b border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-400">
-                                            ${(p.invoice?.total_amount || 0).toLocaleString()}
-                                        </td>
-                                        <td className="px-6 py-4 border-r border-b border-gray-200 dark:border-gray-700">
-                                            <div className="text-sm font-bold text-cyan-600">${p.amount.toLocaleString()}</div>
-                                        </td>
-                                        <td className="px-6 py-4 border-r border-b border-gray-200 dark:border-gray-700">
-                                            <div className="text-sm font-bold text-amber-600">${(p.invoice?.balance || 0).toLocaleString()}</div>
-                                        </td>
-                                        <td className="px-6 py-4 border-r border-b border-gray-200 dark:border-gray-700">
-                                            <div className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
-                                                {p.payment_method === 'cash' ? <Banknote className="w-3 h-3 text-green-600" /> :
-                                                    p.payment_method === 'card' ? <CreditCard className="w-3 h-3 text-blue-600" /> :
-                                                        <Wallet className="w-3 h-3 text-purple-600" />}
-                                                {p.payment_method.toUpperCase()}
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-sm text-gray-500 dark:text-gray-400 max-w-[160px] truncate">{p.notes || '—'}</td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5">
+                                            <div className="flex items-center justify-center gap-1">
+                                                <button onClick={() => { setSelectedPaymentForPrint(p); setShowPrintView(true); }} className="p-1.5 text-gray-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-md transition" title="Print"><Printer className="w-4 h-4" /></button>
+                                                {profile?.role === 'admin' && (<>
+                                                    <button onClick={() => handleEditPayment(p)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                                    <button onClick={() => handleDeletePayment(p)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                                </>)}
                                             </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-gray-500 italic max-w-xs truncate border-r border-b border-gray-200 dark:border-gray-700">
-                                            {p.notes || '-'}
-                                        </td>
-                                        <td className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-                                            <button
-                                                onClick={() => {
-                                                    setSelectedPaymentForPrint(p);
-                                                    setShowPrintView(true);
-                                                }}
-                                                className="p-1 hover:text-cyan-600 transition"
-                                                title="Print Receipt"
-                                            >
-                                                <Printer className="w-4 h-4" />
-                                            </button>
                                         </td>
                                     </tr>
                                 ))
@@ -510,15 +969,27 @@ export function Payments() {
                                     <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                                 </button>
                                 <div className="flex gap-1">
-                                    {[...Array(totalPages)].map((_, i) => (
-                                        <button
-                                            key={i}
-                                            onClick={() => setCurrentPage(i + 1)}
-                                            className={`w-8 h-8 rounded-lg text-xs font-bold transition ${currentPage === i + 1 ? 'bg-cyan-600 text-white' : 'border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700'}`}
-                                        >
-                                            {i + 1}
-                                        </button>
-                                    ))}
+                                    {(() => {
+                                        const pages: (number | 'ellipsis')[] = [];
+                                        if (totalPages <= 7) {
+                                            for (let i = 1; i <= totalPages; i++) pages.push(i);
+                                        } else {
+                                            pages.push(1);
+                                            if (currentPage > 3) pages.push('ellipsis');
+                                            for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) pages.push(i);
+                                            if (currentPage < totalPages - 2) pages.push('ellipsis');
+                                            pages.push(totalPages);
+                                        }
+                                        return pages.map((page, idx) =>
+                                            page === 'ellipsis'
+                                                ? <span key={`ellipsis-${idx}`} className="w-8 h-8 flex items-center justify-center text-xs text-gray-400">…</span>
+                                                : <button
+                                                    key={page}
+                                                    onClick={() => setCurrentPage(page)}
+                                                    className={`w-8 h-8 rounded-lg text-xs font-bold transition ${currentPage === page ? 'bg-cyan-600 text-white' : 'border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700'}`}
+                                                >{page}</button>
+                                        );
+                                    })()}
                                 </div>
                                 <button
                                     disabled={currentPage === totalPages}
@@ -538,69 +1009,69 @@ export function Payments() {
                     <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
                         <div className="flex justify-between items-center mb-6">
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                                <Plus className="w-6 h-6 text-cyan-600" />
-                                Record Payment
+                                {editingPaymentId ? <Pencil className="w-5 h-5 text-amber-500" /> : <Plus className="w-6 h-6 text-cyan-600" />}
+                                {editingPaymentId ? 'Edit Payment' : 'Record Payment'}
                             </h2>
-                            <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
+                            <button onClick={() => { setShowModal(false); resetForm(); }} className="text-gray-400 hover:text-gray-600">
                                 <X className="w-6 h-6" />
                             </button>
                         </div>
 
                         <form onSubmit={handleSubmit} className="space-y-4">
                             <div className="relative">
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Invoice (Search by Patient or Invoice #) *</label>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Bill (Search by Patient or INV #) *</label>
                                 <div className="relative">
                                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                                     <input
                                         type="text"
-                                        placeholder="Type patient name or invoice number..."
-                                        value={invoiceSearch}
+                                        placeholder="Type patient name or INV number..."
+                                        value={billSearch}
                                         onFocus={() => setIsDropdownOpen(true)}
                                         onChange={(e) => {
-                                            setInvoiceSearch(e.target.value);
+                                            setBillSearch(e.target.value);
                                             setIsDropdownOpen(true);
-                                            if (!e.target.value) setFormData({ ...formData, invoice_id: '' });
+                                            if (!e.target.value) setFormData({ ...formData, bill_id: '' });
                                         }}
                                         className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                                         required
                                     />
                                     {isDropdownOpen && (
                                         <div className="absolute z-[60] left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
-                                            {filteredInvoices.length > 0 ? (
-                                                filteredInvoices.map((inv) => (
+                                            {filteredBills.length > 0 ? (
+                                                filteredBills.map((bill) => (
                                                     <button
-                                                        key={inv.id}
+                                                        key={bill.id}
                                                         type="button"
                                                         onClick={() => {
-                                                            setFormData({ ...formData, invoice_id: inv.id });
-                                                            setInvoiceSearch(`${inv.invoice_number} - ${inv.patient?.full_name}`);
+                                                            setFormData({ ...formData, bill_id: bill.id });
+                                                            setBillSearch(`${bill.bill_number} - ${bill.patient?.full_name}`);
                                                             setIsDropdownOpen(false);
                                                         }}
                                                         className="w-full text-left px-4 py-3 hover:bg-cyan-50 dark:hover:bg-cyan-900/30 border-b border-gray-100 dark:border-gray-700 last:border-0 transition"
                                                     >
                                                         <div className="flex justify-between items-start">
                                                             <div>
-                                                                <div className="text-sm font-bold text-gray-900 dark:text-white">{inv.invoice_number}</div>
-                                                                <div className="text-xs text-gray-500">{inv.patient?.full_name}</div>
+                                                                <div className="text-sm font-bold text-gray-900 dark:text-white">{bill.bill_number}</div>
+                                                                <div className="text-xs text-gray-500">{bill.patient?.full_name}</div>
                                                             </div>
                                                             <div className="text-xs font-bold text-cyan-600 text-right">
-                                                                <div>Bill: ${inv.total_amount.toLocaleString()}</div>
-                                                                <div className="text-[10px] text-amber-600">Bal: ${(inv.balance || 0).toLocaleString()}</div>
+                                                                <div>Bill: ${bill.total_amount.toLocaleString()}</div>
+                                                                <div className="text-[10px] text-amber-600">Bal: ${(bill.balance || 0).toLocaleString()}</div>
                                                             </div>
                                                         </div>
                                                     </button>
                                                 ))
                                             ) : (
-                                                <div className="px-4 py-3 text-sm text-gray-500 text-center">No matching invoices found</div>
+                                                <div className="px-4 py-3 text-sm text-gray-500 text-center">No matching bills found</div>
                                             )}
                                         </div>
                                     )}
                                 </div>
-                                {formData.invoice_id && (
+                                {formData.bill_id && (
                                     <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg flex justify-between text-xs font-medium">
                                         <div className="text-gray-500">Current Balance:</div>
                                         <div className="text-amber-600 font-bold">
-                                            ${(invoices.find(i => i.id === formData.invoice_id)?.balance || 0).toLocaleString()}
+                                            ${(bills.find(i => i.id === formData.bill_id)?.balance || 0).toLocaleString()}
                                         </div>
                                     </div>
                                 )}
@@ -611,36 +1082,90 @@ export function Payments() {
                                     ></div>
                                 )}
                             </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Payment Amount *</label>
-                                <div className="relative">
-                                    <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400">$</div>
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        value={formData.amount}
-                                        onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                                        className="w-full pl-8 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                        required
-                                    />
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Payment Amount *</label>
+                                    <div className="relative">
+                                        <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400">$</div>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={formData.amount}
+                                            onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                                            className="w-full pl-8 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                            required
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-amber-600 mb-1">Discount Amount</label>
+                                    <div className="relative">
+                                        <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-amber-400">$</div>
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={formData.discount}
+                                            onChange={(e) => setFormData({ ...formData, discount: e.target.value })}
+                                            className="w-full pl-8 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-amber-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-amber-600"
+                                            placeholder="0.00"
+                                        />
+                                    </div>
                                 </div>
                             </div>
 
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Payment Method *</label>
-                                <select
-                                    value={formData.payment_method}
-                                    onChange={(e) => setFormData({ ...formData, payment_method: e.target.value })}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                    required
-                                >
-                                    <option value="cash">Cash</option>
-                                    <option value="card">Card</option>
-                                    <option value="eft">EFT / Bank Transfer</option>
-                                    <option value="medical_aid">Medical Aid</option>
-                                </select>
+                                 <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Payment Date *</label>
+                                    <input
+                                        type="date"
+                                        value={formData.payment_date}
+                                        onChange={(e) => setFormData({ ...formData, payment_date: e.target.value })}
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                        required
+                                    />
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Method *</label>
+                                        <select
+                                            value={formData.payment_method}
+                                            onChange={(e) => setFormData({ ...formData, payment_method: e.target.value })}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-cyan-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                            required
+                                        >
+                                        <option value="cash">Cash</option>
+                                        <option value="card">Card</option>
+                                        <option value="eft">EFT / Bank Transfer</option>
+                                        <option value="medical_aid">Medical Aid</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Portion *</label>
+                                    <select
+                                        value={formData.target_portion}
+                                        onChange={(e) => setFormData({ ...formData, target_portion: e.target.value as 'shortfall' | 'medical_aid' })}
+                                        className="w-full px-3 py-2 border border-blue-300 dark:border-blue-600 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                        required
+                                    >
+                                        <option value="shortfall">Patient Shortfall</option>
+                                        <option value="medical_aid">Medical Aid Portion</option>
+                                    </select>
+                                </div>
                             </div>
+
+                            {(formData.payment_method === 'medical_aid' || formData.target_portion === 'medical_aid') && formData.bill_id && (
+                                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-lg animate-in fade-in slide-in-from-top-1 duration-200">
+                                    <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 font-bold text-xs uppercase tracking-wider mb-1">
+                                        <CreditCard className="w-3.5 h-3.5" />
+                                        Medical Aid Billing
+                                    </div>
+                                    <div className="text-sm font-black text-gray-900 dark:text-white">
+                                        {bills.find(i => i.id === formData.bill_id)?.patient?.medical_aid?.name || (
+                                            <span className="text-amber-600 italic">No medical aid assigned to this patient</span>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
 
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
@@ -656,7 +1181,7 @@ export function Payments() {
                             <div className="flex gap-4 pt-4">
                                 <button
                                     type="button"
-                                    onClick={() => setShowModal(false)}
+                                    onClick={() => { setShowModal(false); resetForm(); }}
                                     className="flex-1 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50"
                                 >
                                     Cancel
@@ -666,7 +1191,7 @@ export function Payments() {
                                     disabled={loading}
                                     className="flex-1 py-3 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 shadow-lg font-bold disabled:opacity-50"
                                 >
-                                    {loading ? 'Processing...' : 'Record Payment'}
+                                    {loading ? 'Processing...' : (editingPaymentId ? 'Update Payment' : 'Record Payment')}
                                 </button>
                             </div>
                         </form>

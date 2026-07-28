@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Search, Building2, UserCheck, X, UserPlus } from 'lucide-react';
+import { Search, Building2, UserCheck, X, UserPlus, Trash2, ShieldCheck, UserMinus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { createStaffUserAccount } from '../utils/userCreation';
 import { logActivity } from '../utils/auditLogger';
 
 interface User {
@@ -20,42 +21,69 @@ interface Branch {
   name: string;
 }
 
+interface Role {
+  id: string;
+  name: string;
+  base_role: string;
+}
+
 export function Users() {
-  const { profile } = useAuth();
+  const { profile, hasPermission } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showRoleModal, setShowRoleModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [selectedRoleId, setSelectedRoleId] = useState('');
   const [submitLoading, setSubmitLoading] = useState(false);
   const [createFormData, setCreateFormData] = useState({
     full_name: '',
     email: '',
     password: '',
     phone: '',
-    role: 'admin',
+    role: '', // base_role
+    role_id: '',
     branch_id: ''
   });
 
   useEffect(() => {
     loadData();
-  }, []);
+    if (profile?.role !== 'super_admin' && profile?.branch_id) {
+        setCreateFormData(prev => ({ ...prev, branch_id: profile.branch_id || '' }));
+    }
+  }, [profile]);
 
   const loadData = async () => {
     try {
-      const [usersResponse, branchesResponse] = await Promise.all([
-        supabase.from('users').select('*').order('created_at', { ascending: false }),
-        supabase.from('branches').select('id, name').eq('is_active', true).order('name')
+      let usersQuery = supabase.from('users').select('*, roles:users_role_id_fkey(name)').order('created_at', { ascending: false });
+      let branchesQuery = supabase.from('branches').select('id, name').eq('is_active', true).order('name');
+      let rolesQuery = supabase.from('roles').select('id, name, base_role').eq('is_active', true).order('name');
+
+      // Filter by branch for non-superadmins
+      if (profile?.role !== 'super_admin' && profile?.branch_id) {
+        usersQuery = usersQuery.eq('branch_id', profile.branch_id);
+        branchesQuery = branchesQuery.eq('id', profile.branch_id);
+        rolesQuery = rolesQuery.or(`branch_id.eq.${profile.branch_id},branch_id.is.null`);
+      }
+
+      const [usersResponse, branchesResponse, rolesResponse] = await Promise.all([
+        usersQuery,
+        branchesQuery,
+        rolesQuery
       ]);
 
       if (usersResponse.error) throw usersResponse.error;
       if (branchesResponse.error) throw branchesResponse.error;
+      if (rolesResponse.error) throw rolesResponse.error;
 
       setUsers(usersResponse.data || []);
       setBranches(branchesResponse.data || []);
+      setRoles(rolesResponse.data || []);
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -63,54 +91,51 @@ export function Users() {
     }
   };
 
+  const resetCreateForm = () => {
+    setCreateFormData({
+      full_name: '',
+      email: '',
+      password: '',
+      phone: '',
+      role: '',
+      role_id: '',
+      branch_id: ''
+    });
+  };
+
+  const loadUsers = loadData;
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitLoading(true);
 
     try {
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      const { user: createdUser } = await createStaffUserAccount({
         email: createFormData.email,
         password: createFormData.password,
+        full_name: createFormData.full_name,
+        phone: createFormData.phone || '',
+        role: createFormData.role,
+        role_id: createFormData.role_id,
+        branch_id: profile?.role === 'super_admin' ? (createFormData.branch_id || null) : (profile?.branch_id || null)
       });
 
-      if (authError) throw authError;
-
-      if (authData.user) {
-        const { error: profileError } = await supabase.rpc('create_user_profile', {
-          p_user_id: authData.user.id,
-          p_email: createFormData.email,
-          p_full_name: createFormData.full_name,
-          p_phone: createFormData.phone || null,
-          p_role: createFormData.role,
-          p_branch_id: createFormData.branch_id || null
-        });
-
-        if (profileError) throw profileError;
-
-        if (profile?.id) {
-            await logActivity(supabase, {
-                userId: profile.id,
-                branchId: createFormData.branch_id || profile.branch_id || '',
-                action: 'CREATE',
-                tableName: 'users',
-                recordId: authData.user.id,
-                details: `Created new staff member: ${createFormData.full_name} (${createFormData.role})`,
-                newValues: { email: createFormData.email, role: createFormData.role, branch_id: createFormData.branch_id }
-            });
-        }
-
-        alert('User created successfully!');
-        setShowCreateModal(false);
-        setCreateFormData({
-          full_name: '',
-          email: '',
-          password: '',
-          phone: '',
-          role: 'admin',
-          branch_id: ''
-        });
-        loadData();
+      if (profile?.id) {
+          await logActivity(supabase, {
+              userId: profile.id,
+              branchId: createFormData.branch_id || profile.branch_id || '',
+              action: 'CREATE',
+              tableName: 'users',
+              recordId: createdUser.id,
+              details: `Created new staff member: ${createFormData.full_name} (${createFormData.role})`,
+              newValues: { email: createFormData.email, role: createFormData.role, branch_id: createFormData.branch_id }
+          });
       }
+
+      alert('User created successfully!');
+      setShowCreateModal(false);
+      resetCreateForm();
+      loadUsers();
     } catch (error: any) {
       console.error('Error creating user:', error);
       alert(error.message || 'Failed to create user');
@@ -157,6 +182,128 @@ export function Users() {
     }
   };
 
+  const handleDeleteUser = async (user: User) => {
+    if (user.id === profile?.id) {
+      alert('You cannot delete your own account.');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to permanently delete ${user.full_name}? This action cannot be undone.`)) {
+      return;
+    }
+
+    setSubmitLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('delete_user_account', {
+        p_user_id: user.id
+      });
+
+      if (error) throw error;
+      
+      const result = data as { success: boolean; message: string };
+      if (!result.success) {
+        throw new Error(result.message);
+      }
+
+      if (profile?.id) {
+        await logActivity(supabase, {
+          userId: profile.id,
+          branchId: profile.branch_id || '',
+          action: 'DELETE',
+          tableName: 'users',
+          recordId: user.id,
+          details: `Deleted user: ${user.full_name} (${user.email})`,
+        });
+      }
+
+      alert('User deleted successfully');
+      loadData();
+    } catch (error: any) {
+      console.error('Error deleting user:', error);
+      alert(error.message || 'Failed to delete user');
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  const handleUpdateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUser || !selectedRoleId) return;
+
+    setSubmitLoading(true);
+    try {
+      const selectedRole = roles.find(r => r.id === selectedRoleId);
+      if (!selectedRole) throw new Error('Selected role not found');
+
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          role_id: selectedRoleId,
+          role: selectedRole.base_role 
+        })
+        .eq('id', selectedUser.id);
+
+      if (error) throw error;
+
+      if (profile?.id) {
+          await logActivity(supabase, {
+              userId: profile.id,
+              branchId: profile.branch_id || '',
+              action: 'UPDATE',
+              tableName: 'users',
+              recordId: selectedUser.id,
+              details: `Updated role for ${selectedUser.full_name} to ${selectedRole.name}`,
+              newValues: { role_id: selectedRoleId, role: selectedRole.base_role }
+          });
+      }
+
+      alert('Role updated successfully!');
+      setShowRoleModal(false);
+      setSelectedUser(null);
+      setSelectedRoleId('');
+      loadData();
+    } catch (error: any) {
+      console.error('Error updating role:', error);
+      alert(error.message || 'Failed to update role');
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  const handleToggleStatus = async (user: User) => {
+    try {
+      setSubmitLoading(true);
+      const newStatus = !user.is_active;
+      
+      const { error } = await supabase
+        .from('users')
+        .update({ is_active: newStatus })
+        .eq('id', user.id);
+
+      if (error) throw error;
+
+      if (profile?.id) {
+        await logActivity(supabase, {
+          userId: profile.id,
+          branchId: profile.branch_id || '',
+          action: 'UPDATE',
+          tableName: 'users',
+          recordId: user.id,
+          details: `${newStatus ? 'Activated' : 'Deactivated'} user: ${user.full_name}`,
+          newValues: { is_active: newStatus }
+        });
+      }
+
+      alert(`User ${newStatus ? 'activated' : 'deactivated'} successfully`);
+      loadData();
+    } catch (error: any) {
+      console.error('Error toggling user status:', error);
+      alert(error.message || 'Failed to update user status');
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
   const getBranchName = (branchId: string | null) => {
     if (!branchId) return '-';
     const branch = branches.find(b => b.id === branchId);
@@ -166,10 +313,10 @@ export function Users() {
   const filteredUsers = users.filter(user =>
     user.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.role.toLowerCase().includes(searchQuery.toLowerCase())
+    (user as any).roles?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (profile?.role !== 'super_admin') {
+  if (!hasPermission('staff', 'view')) {
     return (
       <div className="text-center py-8">
         <p className="text-gray-500 dark:text-gray-400">You don't have permission to view this page</p>
@@ -215,7 +362,7 @@ export function Users() {
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-md shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <table className="w-full">
+        <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
           <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
             <tr>
               <th className="px-3 py-2 text-left font-semibold text-gray-900 dark:text-white">Name</th>
@@ -228,12 +375,12 @@ export function Users() {
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
             {filteredUsers.map((user) => (
-              <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition">
+              <tr key={user.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/30 transition">
                 <td className="px-3 py-2.5 text-gray-900 dark:text-white font-medium">{user.full_name}</td>
                 <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">{user.email}</td>
                 <td className="px-3 py-2.5">
                   <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 capitalize">
-                    {user.role.replace('_', ' ')}
+                    {(user as any).roles?.name || user.role.replace('_', ' ')}
                   </span>
                 </td>
                 <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400">
@@ -254,17 +401,47 @@ export function Users() {
                 <td className="px-3 py-2.5">
                   <div className="flex items-center justify-center">
                     {(user.role === 'admin' || user.role === 'doctor' || user.role === 'nurse' || user.role === 'receptionist' || user.role === 'accountant') && (
-                      <button
-                        onClick={() => {
-                          setSelectedUser(user);
-                          setSelectedBranchId(user.branch_id || '');
-                          setShowAssignModal(true);
-                        }}
-                        className="p-1.5 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition"
-                        title={user.branch_id ? 'Change Branch' : 'Assign Branch'}
-                      >
-                        <UserCheck className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center space-x-1">
+                        {profile?.role === 'super_admin' && (
+                          <button
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setSelectedBranchId(user.branch_id || '');
+                              setShowAssignModal(true);
+                            }}
+                            className="p-1.5 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition"
+                            title={user.branch_id ? 'Change Branch' : 'Assign Branch'}
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            setSelectedUser(user);
+                            setSelectedRoleId((user as any).role_id || '');
+                            setShowRoleModal(true);
+                          }}
+                          className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition"
+                          title="Manage Role"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleToggleStatus(user)}
+                          className={`p-1.5 rounded transition ${user.is_active ? 'text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20' : 'text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20'}`}
+                          title={user.is_active ? 'Deactivate User' : 'Activate User'}
+                          disabled={submitLoading}
+                        >
+                          {user.is_active ? <UserMinus className="w-3.5 h-3.5" /> : <UserCheck className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user)}
+                          className="p-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition"
+                          title="Delete User"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 </td>
@@ -292,7 +469,8 @@ export function Users() {
                     email: '',
                     password: '',
                     phone: '',
-                    role: 'admin',
+                    role: '',
+                    role_id: '',
                     branch_id: ''
                   });
                 }}
@@ -355,35 +533,45 @@ export function Users() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
                 <select
-                  value={createFormData.role}
-                  onChange={(e) => setCreateFormData({ ...createFormData, role: e.target.value })}
+                  value={createFormData.role_id}
+                  onChange={(e) => {
+                    const selectedRole = roles.find(r => r.id === e.target.value);
+                    setCreateFormData({ 
+                      ...createFormData, 
+                      role_id: e.target.value,
+                      role: selectedRole?.base_role || ''
+                    });
+                  }}
                   className="w-full px-2.5 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   required
                 >
-                  <option value="admin">Admin</option>
-                  <option value="doctor">Doctor</option>
-                  <option value="nurse">Nurse</option>
-                  <option value="receptionist">Receptionist</option>
-                  <option value="accountant">Accountant</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Branch</label>
-                <select
-                  value={createFormData.branch_id}
-                  onChange={(e) => setCreateFormData({ ...createFormData, branch_id: e.target.value })}
-                  className="w-full px-2.5 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  required
-                >
-                  <option value="">-- Select a branch --</option>
-                  {branches.map((branch) => (
-                    <option key={branch.id} value={branch.id}>
-                      {branch.name}
+                  <option value="">-- Select a role --</option>
+                  {roles.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {role.name}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {profile?.role === 'super_admin' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Branch</label>
+                  <select
+                    value={createFormData.branch_id}
+                    onChange={(e) => setCreateFormData({ ...createFormData, branch_id: e.target.value })}
+                    className="w-full px-2.5 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    required
+                  >
+                    <option value="">-- Select a branch --</option>
+                    {branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex space-x-2 mt-4">
                 <button
@@ -395,7 +583,8 @@ export function Users() {
                       email: '',
                       password: '',
                       phone: '',
-                      role: 'admin',
+                      role: '',
+                      role_id: '',
                       branch_id: ''
                     });
                   }}
@@ -485,6 +674,73 @@ export function Users() {
                   disabled={submitLoading}
                 >
                   {submitLoading ? 'Saving...' : (selectedUser.branch_id ? 'Change Branch' : 'Assign Branch')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showRoleModal && selectedUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-md max-w-md w-full p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">
+                Manage User Role
+              </h2>
+              <button
+                onClick={() => {
+                  setShowRoleModal(false);
+                  setSelectedUser(null);
+                  setSelectedRoleId('');
+                }}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+              Update permissions role for <span className="font-semibold">{selectedUser.full_name}</span>
+            </p>
+
+            <form onSubmit={handleUpdateRole} className="space-y-3">
+              <div>
+                <label className="block font-medium text-gray-700 dark:text-gray-300 mb-1">Select New Role</label>
+                <select
+                  value={selectedRoleId}
+                  onChange={(e) => setSelectedRoleId(e.target.value)}
+                  className="w-full px-2.5 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-green-500 focus:border-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  required
+                >
+                  <option value="">-- Select a role --</option>
+                  {roles.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {role.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex space-x-2 mt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRoleModal(false);
+                    setSelectedUser(null);
+                    setSelectedRoleId('');
+                  }}
+                  className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                  disabled={submitLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-3 py-1.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-md hover:from-green-700 hover:to-emerald-700 transition shadow-sm disabled:opacity-50"
+                  disabled={submitLoading}
+                >
+                  {submitLoading ? 'Updating...' : 'Update Role'}
                 </button>
               </div>
             </form>

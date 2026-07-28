@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, FileText, Pencil, Trash2, X, Eye } from 'lucide-react';
+import { Plus, FileText, Pencil, Trash2, X, Eye, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { ClinicalDocumentPrintView } from '../components/ClinicalDocumentPrintView';
 import { SearchDropdown } from '../components/SearchDropdown';
 
@@ -60,11 +60,14 @@ export default function OperationReports() {
     const { profile } = useAuth();
     const [reports, setReports] = useState<OperationReport[]>([]);
     const [loading, setLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
     const [showModal, setShowModal] = useState(false);
     const [showPatientModal, setShowPatientModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
     const [selectedDoc, setSelectedDoc] = useState<OperationReport | null>(null);
     const [branch, setBranch] = useState<any>(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
 
     /* Form State */
     const [form, setForm] = useState({
@@ -103,13 +106,13 @@ export default function OperationReports() {
     const [assistants, setAssistants] = useState<any[]>([]);
 
     useEffect(() => {
-        if (profile?.branch_id) {
+        if (profile) {
             loadAll();
             fetchBranchDetails();
         } else {
             setLoading(false);
         }
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     async function fetchBranchDetails() {
         if (!profile?.branch_id) return;
@@ -118,20 +121,48 @@ export default function OperationReports() {
     }
 
     async function loadAll() {
-        if (!profile?.branch_id) return;
         setLoading(true);
         try {
+            const bid = profile?.branch_id;
+
+            let forQ = supabase.from('operation_reports').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), procedure:surgical_procedures(name), hospital:hospitals(name)');
+            let patQ = supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth');
+            let hospQ = supabase.from('hospitals').select('*');
+            let anaQ = supabase.from('anaesthetists').select('*');
+            let astQ = supabase.from('assistants').select('*');
+            let docQ = supabase.from('users').select('id, full_name').eq('role', 'doctor').eq('is_active', true);
+            let prcQ = supabase.from('surgical_procedures').select('*');
+
+            if (bid) {
+                forQ = forQ.eq('branch_id', bid);
+                patQ = patQ.eq('branch_id', bid);
+                hospQ = hospQ.eq('branch_id', bid);
+                anaQ = anaQ.eq('branch_id', bid);
+                astQ = astQ.eq('branch_id', bid);
+                docQ = docQ.eq('branch_id', bid);
+                prcQ = prcQ.eq('branch_id', bid);
+            }
+
             const [forRes, patRes, hospRes, anaRes, astRes, docRes, prcRes] = await Promise.all([
-                supabase.from('operation_reports').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), procedure:surgical_procedures(name), hospital:hospitals(name)').eq('branch_id', profile?.branch_id).order('created_at', { ascending: false }),
-                supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth').eq('branch_id', profile?.branch_id),
-                supabase.from('hospitals').select('*').eq('branch_id', profile?.branch_id).order('name'),
-                supabase.from('anaesthetists').select('*').eq('branch_id', profile?.branch_id).order('full_name'),
-                supabase.from('assistants').select('*').eq('branch_id', profile?.branch_id).order('full_name'),
-                supabase.from('users').select('id, full_name').eq('branch_id', profile?.branch_id).eq('role', 'doctor').eq('is_active', true).order('full_name'),
-                supabase.from('surgical_procedures').select('*').eq('branch_id', profile?.branch_id).order('name')
+                forQ.order('operation_date', { ascending: false }).order('created_at', { ascending: false }),
+                patQ,
+                hospQ.order('name'),
+                anaQ.order('full_name'),
+                astQ.order('full_name'),
+                docQ.order('full_name'),
+                prcQ.order('name')
             ]);
 
-            if (!forRes.error) setReports(forRes.data || []);
+            if (!forRes.error) {
+                const mapped = (forRes.data || []).map((r: any) => ({
+                    ...r,
+                    report_date: r.operation_date,
+                    doctor_id: r.surgeon_id,
+                    description: r.procedure_description,
+                    remarks: r.findings || r.complications
+                }));
+                setReports(mapped);
+            }
             if (!patRes.error) setPatients(patRes.data || []);
             if (!hospRes.error) setHospitals(hospRes.data || []);
             if (!anaRes.error) setAnaesthetists(anaRes.data || []);
@@ -174,21 +205,39 @@ export default function OperationReports() {
             return;
         }
 
-        const payload = { ...form, branch_id: profile?.branch_id };
+        const procedureName = procedures.find(p => p.id === form.procedure_id)?.name || '';
+
+        const dbPayload = {
+            branch_id: profile?.branch_id,
+            patient_id: form.patient_id,
+            surgeon_id: form.doctor_id,
+            operation_date: form.report_date,
+            hospital_id: form.hospital_id || null,
+            anaesthetist_ids: form.anaesthetist_ids || [],
+            assistant_ids: form.assistant_ids || [],
+            anaesthesia_type: form.anaesthesia_type,
+            procedure_id: form.procedure_id || null,
+            procedure_description: form.description,
+            post_op_plan: form.post_op_plan,
+            follow_up_date: form.follow_up_date || null,
+            follow_up_time: form.follow_up_time || null,
+            findings: form.remarks || null,
+            operation_name: procedureName || 'Surgical Operation',
+            procedure_text: procedureName || null
+        };
 
         try {
             if (selectedDoc) {
-                const { patient, doctor, hospital, procedure, created_at, updated_at, id, ...cleanDoc } = selectedDoc as any;
-                const updateData = { ...cleanDoc, ...form, branch_id: profile?.branch_id };
-                const { error } = await supabase.from('operation_reports').update(updateData).eq('id', selectedDoc.id);
+                const { error } = await supabase.from('operation_reports').update(dbPayload).eq('id', selectedDoc.id);
                 if (error) throw error;
             } else {
-                const { error } = await supabase.from('operation_reports').insert([payload]);
+                const { error } = await supabase.from('operation_reports').insert([dbPayload]);
                 if (error) throw error;
             }
 
             setShowModal(false);
             resetForm();
+            setCurrentPage(1);
             loadAll();
         } catch (err: any) {
             alert(err.message);
@@ -205,10 +254,15 @@ export default function OperationReports() {
     async function handleCreatePatient(e: React.FormEvent) {
         e.preventDefault();
         const pNum = `P-${Date.now().toString().slice(-6)}`;
+        const generatedEmail = newPatientForm.email || `patient.${pNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+        const generatedPassword = 'patient123456';
         const { data, error } = await supabase.from('patients').insert([{
             ...newPatientForm,
+            email: generatedEmail,
+            password: generatedPassword,
             patient_number: pNum,
-            branch_id: profile?.branch_id
+            branch_id: profile?.branch_id,
+            status: 'active'
         }]).select().single();
 
         if (error) alert(error.message);
@@ -292,25 +346,100 @@ export default function OperationReports() {
         );
     }
 
+    const filteredReports = reports.filter(r => {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+        const patientName = r.patient?.full_name?.toLowerCase() || '';
+        const patientNum = r.patient?.patient_number?.toLowerCase() || '';
+        const procName = (r.procedure?.name || (r as any).procedure_text || (r as any).operation_name || '').toLowerCase();
+        const docName = r.doctor?.full_name?.toLowerCase() || '';
+        const hospName = r.hospital?.name?.toLowerCase() || '';
+        return patientName.includes(query) || patientNum.includes(query) || procName.includes(query) || docName.includes(query) || hospName.includes(query);
+    });
+
     return (
         <div className="p-6 max-w-7xl mx-auto">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Operation Reports</h1>
-                    <p className="text-sm text-gray-500">Document and manage surgical procedure details</p>
+                    <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Operation Reports</h1>
+                    <p className="text-xs sm:text-sm text-gray-500">Document and manage surgical procedure details</p>
                 </div>
                 <button onClick={() => { resetForm(); setShowModal(true); }}
-                    className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition shadow-md font-semibold">
-                    <Plus className="w-5 h-5" /> Add New Report
+                    className="flex items-center gap-2 bg-indigo-600 text-white px-3.5 py-2 rounded-xl hover:bg-indigo-700 transition shadow-sm text-xs sm:text-sm font-bold shrink-0">
+                    <Plus className="w-4 h-4" /> Add New Report
                 </button>
             </div>
 
-            {/* Table */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+            {/* 🔍 Search Input Bar */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-3.5 mb-5">
+                <div className="relative w-full">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                        placeholder="Search by patient name, patient ID, procedure, doctor, or hospital..."
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs sm:text-sm font-medium"
+                    />
+                </div>
+            </div>
+
+            {/* 📱 Mobile Card View (< md) */}
+            <div className="md:hidden space-y-3">
+                {loading ? (
+                    <div className="py-10 text-center text-gray-400">Loading reports...</div>
+                ) : filteredReports.length === 0 ? (
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-8 text-center text-sm font-medium text-gray-500">No operation reports found matching your search.</div>
+                ) : filteredReports.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(r => (
+                    <div key={r.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{r.patient?.full_name || 'N/A'}</h3>
+                                <p className="text-xs text-gray-500 font-mono">ID: {r.patient?.patient_number || 'N/A'}</p>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
+                                {r.procedure?.name || (r as any).procedure_text || (r as any).operation_name || 'Operation'}
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Report Date</span>
+                                <span className="font-semibold text-gray-900 dark:text-white">{new Date(r.report_date).toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">Dr. {r.doctor?.full_name || 'Staff'}</span>
+                            </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                            <span className="text-xs text-gray-500 font-medium">{r.hospital?.name || 'Main Hospital'}</span>
+                            <div className="flex items-center space-x-1">
+                                <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => {
+                                    setSelectedDoc(r);
+                                    const { patient, doctor, hospital, procedure, created_at, updated_at, id, ...formData } = r as any;
+                                    setForm({
+                                        ...formData,
+                                        anaesthetist_ids: formData.anaesthetist_ids || [],
+                                        assistant_ids: formData.assistant_ids || []
+                                    } as any);
+                                    setShowModal(true);
+                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* 💻 Desktop Table View (>= md) */}
+            <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full text-left border-collapse clinical-table">
                         <thead>
-                            <tr className="bg-gray-50 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
+                            <tr className="bg-gray-100 dark:bg-gray-900/50 text-[11px] uppercase tracking-wider text-gray-500 font-bold border-b border-gray-100 dark:border-gray-700">
                                 <th className="px-6 py-4">Date</th>
                                 <th className="px-6 py-4">Patient</th>
                                 <th className="px-6 py-4">Procedure</th>
@@ -322,9 +451,9 @@ export default function OperationReports() {
                         <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
                             {loading ? (
                                 <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">Loading reports...</td></tr>
-                            ) : reports.length === 0 ? (
-                                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">No operation reports found.</td></tr>
-                            ) : reports.map(r => (
+                            ) : filteredReports.length === 0 ? (
+                                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-400">No operation reports found matching your search.</td></tr>
+                            ) : filteredReports.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(r => (
                                 <tr key={r.id} className="hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10 transition group">
                                     <td className="px-6 py-4 text-sm font-medium text-gray-600 dark:text-gray-400">{new Date(r.report_date).toLocaleDateString()}</td>
                                     <td className="px-6 py-4">
@@ -333,11 +462,11 @@ export default function OperationReports() {
                                             <span className="text-[10px] text-gray-400">{r.patient?.patient_number}</span>
                                         </div>
                                     </td>
-                                    <td className="px-6 py-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{r.procedure?.name || 'N/A'}</td>
+                                    <td className="px-6 py-4 text-sm font-bold text-indigo-600 dark:text-indigo-400">{r.procedure?.name || (r as any).procedure_text || (r as any).operation_name || 'N/A'}</td>
                                     <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">{r.hospital?.name || 'N/A'}</td>
                                     <td className="px-6 py-4 text-sm text-gray-500 font-medium">Dr. {r.doctor?.full_name}</td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition">
+                                        <div className="flex justify-end gap-2">
                                             <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
                                             <button onClick={() => {
                                                 setSelectedDoc(r);
@@ -357,6 +486,61 @@ export default function OperationReports() {
                         </tbody>
                     </table>
                 </div>
+                {/* Pagination Controls */}
+                {!loading && filteredReports.length > 0 && (
+                    <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/10">
+                        <div className="flex items-center gap-4">
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Showing <span className="font-bold text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-bold text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filteredReports.length)}</span> of <span className="font-bold text-gray-900 dark:text-white">{filteredReports.length}</span> reports
+                            </p>
+                            <div className="flex items-center gap-1.5 border-l pl-4 border-gray-200 dark:border-gray-700">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Show</span>
+                                <select
+                                    value={itemsPerPage}
+                                    onChange={(e) => {
+                                        setItemsPerPage(Number(e.target.value));
+                                        setCurrentPage(1);
+                                    }}
+                                    className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                                >
+                                    <option value={10}>10</option>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </div>
+                        </div>
+                        {Math.ceil(reports.length / itemsPerPage) > 1 && (
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                    disabled={currentPage === 1}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex gap-1">
+                                    {Array.from({ length: Math.ceil(reports.length / itemsPerPage) }, (_, i) => i + 1).map(page => (
+                                        <button
+                                            key={page}
+                                            onClick={() => setCurrentPage(page)}
+                                            className={`w-8 h-8 rounded-lg font-bold transition text-xs ${currentPage === page ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-white dark:hover:bg-gray-700 border border-transparent text-gray-600 dark:text-gray-400'}`}
+                                        >
+                                            {page}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(reports.length / itemsPerPage)))}
+                                    disabled={currentPage === Math.ceil(reports.length / itemsPerPage)}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-50 disabled:hover:bg-transparent transition text-gray-600 dark:text-gray-400"
+                                >
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Add/Edit Modal */}

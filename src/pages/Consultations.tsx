@@ -3,6 +3,14 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+
+const renderHtmlOrText = (text?: string) => {
+    if (!text) return '—';
+    if (/<[a-z][\s\S]*>/i.test(text)) {
+        return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
+    }
+    return <span className="whitespace-pre-wrap">{text}</span>;
+};
 import {
     Plus, Search, Stethoscope, FileText, ClipboardList,
     Activity, Receipt, Pill, X, ChevronDown,
@@ -11,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ConsultationPrintView } from '../components/ConsultationPrintView';
 import { logActivity } from '../utils/auditLogger';
+import { useToast } from '../contexts/ToastContext';
 
 /* ─── interfaces ─────────────────────────────────────────── */
 interface VitalSigns {
@@ -191,11 +200,23 @@ function QuickModal({ title, onClose, children }: QuickModalProps) {
 ═══════════════════════════════════════════════════════════ */
 export function Consultations() {
     const { profile } = useAuth();
+    const { showToast } = useToast();
 
     /* list state */
     const [consultations, setConsultations] = useState<Consultation[]>([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
+
+    /* smart paste state */
+    const [smartPasteText, setSmartPasteText] = useState('');
+    const [smartParseMode, setSmartParseMode] = useState<'autofill' | 'raw'>('autofill');
+    const [parsedResult, setParsedResult] = useState<{
+        physical_examination: string;
+        treatment_plan: string;
+        notes: string;
+        medsMatched: { name: string; dosage?: string; instructions?: string; medicine_id: string }[];
+    } | null>(null);
+    const [showSmartPastePanel, setShowSmartPastePanel] = useState(false);
 
     /* dropdown data */
     const [patients, setPatients] = useState<{ id: string; label: string }[]>([]);
@@ -256,7 +277,7 @@ export function Consultations() {
         loadComplaintsFromDB(); loadInvestigationsFromDB();
         loadDiagnosesFromDB();
         loadMedicinesFromDB();
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -307,26 +328,38 @@ export function Consultations() {
     }
 
     async function loadReferralDoctors() {
-        if (!profile?.branch_id) return;
-        const { data } = await supabase.from('referral_doctors').select('id, full_name').eq('branch_id', profile.branch_id).eq('is_active', true).order('full_name');
+        let query = supabase.from('referral_doctors').select('id, full_name').eq('is_active', true);
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('full_name');
         setReferralDoctors((data || []).map(d => ({ id: d.id, label: d.full_name })));
     }
 
     async function loadComplaintsFromDB() {
-        if (!profile?.branch_id) return;
-        const { data } = await supabase.from('complaints').select('id, name').eq('branch_id', profile.branch_id).order('name');
+        let query = supabase.from('complaints').select('id, name');
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('name');
         setComplaints((data || []).map(c => ({ id: c.id, label: c.name })));
     }
 
     async function loadInvestigationsFromDB() {
-        if (!profile?.branch_id) return;
-        const { data } = await supabase.from('investigations').select('id, name').eq('branch_id', profile.branch_id).order('name');
+        let query = supabase.from('investigations').select('id, name');
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('name');
         setInvestigations((data || []).map(i => ({ id: i.id, label: i.name })));
     }
 
     async function loadDiagnosesFromDB() {
-        if (!profile?.branch_id) return;
-        const { data } = await supabase.from('diagnoses').select('id, name, icd10_code').eq('branch_id', profile.branch_id).order('name');
+        let query = supabase.from('diagnoses').select('id, name, icd10_code');
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('name');
         setDiagnoses((data || []).map(d => ({
             id: d.id,
             label: d.icd10_code ? `${d.name} (${d.icd10_code})` : d.name
@@ -334,8 +367,11 @@ export function Consultations() {
     }
 
     async function loadMedicinesFromDB() {
-        if (!profile?.branch_id) return;
-        const { data } = await supabase.from('medicines').select('id, name, dosage').eq('branch_id', profile.branch_id).order('name');
+        let query = supabase.from('medicines').select('id, name, dosage');
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('name');
         setMedicines((data || []).map(m => ({ id: m.id, name: m.name, dosage: m.dosage || '' })));
     }
 
@@ -373,9 +409,9 @@ export function Consultations() {
             setLoading(true);
             const payload = {
                 ...formData,
-                chief_complaint: selectedComplaints.join(', '),
-                investigations: selectedInvestigations.join(', '),
-                diagnosis: selectedDiagnoses.join(', '),
+                chief_complaint: selectedComplaints.map(id => complaints.find(c => c.id === id)?.label || id).join(', '),
+                investigations: selectedInvestigations.map(id => investigations.find(i => i.id === id)?.label || id).join(', '),
+                diagnosis: selectedDiagnoses.map(id => diagnoses.find(d => d.id === id)?.label || id).join(', '),
                 doctor_id: profile?.id,
                 branch_id: profile?.branch_id,
                 referred_by: formData.referred_by || null,
@@ -439,8 +475,8 @@ export function Consultations() {
             }
 
             setShowModal(false); resetForm(); loadConsultations();
-            alert('Consultation recorded successfully!');
-        } catch (e) { console.error(e); alert('Failed to save consultation'); }
+            showToast('Consultation recorded successfully!');
+        } catch (e: any) { console.error(e); showToast(e.message || 'Failed to save consultation', 'error'); }
         finally { setLoading(false); }
     }
 
@@ -449,9 +485,15 @@ export function Consultations() {
         if (!newPatient.full_name) return;
         try {
             const patNum = `P-${Date.now().toString().slice(-6)}`;
+            const generatedEmail = newPatient.email || `patient.${patNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+            const generatedPassword = 'patient123456';
             const { data, error } = await supabase.from('patients').insert([{
-                ...newPatient, patient_number: patNum,
-                branch_id: profile?.branch_id, status: 'active'
+                ...newPatient,
+                email: generatedEmail,
+                password: generatedPassword,
+                patient_number: patNum,
+                branch_id: profile?.branch_id,
+                status: 'active'
             }]).select().single();
             if (error) throw error;
             
@@ -472,7 +514,8 @@ export function Consultations() {
             setFormData(prev => ({ ...prev, patient_id: data.id }));
             setNewPatient({ full_name: '', date_of_birth: '', gender: 'male', phone: '', email: '' });
             setShowAddPatient(false);
-        } catch (e) { console.error(e); alert('Failed to add patient'); }
+            showToast('Patient added successfully!');
+        } catch (e: any) { console.error(e); showToast(e.message || 'Failed to add patient', 'error'); }
     }
 
     async function handleAddComplaint() {
@@ -481,11 +524,12 @@ export function Consultations() {
             .from('complaints')
             .insert([{ name: newComplaint.trim(), branch_id: profile.branch_id }])
             .select().single();
-        if (error) { alert(error.code === '23505' ? 'This complaint already exists.' : error.message); return; }
+        if (error) { showToast(error.code === '23505' ? 'Record already exists.' : error.message, 'error'); return; }
         const entry = { id: data.id, label: data.name };
         setComplaints(prev => [...prev, entry]);
         setSelectedComplaints(prev => [...prev, entry.id]);
         setNewComplaint(''); setShowAddComplaint(false);
+        showToast('Complaint added!');
     }
 
     async function handleAddInvestigation() {
@@ -494,11 +538,12 @@ export function Consultations() {
             .from('investigations')
             .insert([{ name: newInvestigation.trim(), branch_id: profile.branch_id }])
             .select().single();
-        if (error) { alert(error.code === '23505' ? 'This investigation already exists.' : error.message); return; }
+        if (error) { showToast(error.code === '23505' ? 'Record already exists.' : error.message, 'error'); return; }
         const entry = { id: data.id, label: data.name };
         setInvestigations(prev => [...prev, entry]);
         setSelectedInvestigations(prev => [...prev, entry.id]);
         setNewInvestigation(''); setShowAddInvestigation(false);
+        showToast('Investigation added!');
     }
 
     async function handleAddDiagnosis() {
@@ -511,14 +556,15 @@ export function Consultations() {
                 branch_id: profile.branch_id
             }])
             .select().single();
-        if (error) { alert(error.code === '23505' ? 'This diagnosis already exists.' : error.message); return; }
+        if (error) { showToast(error.code === '23505' ? 'Record already exists.' : error.message, 'error'); return; }
 
         const label = data.icd10_code ? `${data.name} (${data.icd10_code})` : data.name;
-        const entry = { id: data.id, label };
+        const entry = { id: data.id, label: label };
         setDiagnoses(prev => [...prev, entry]);
         setSelectedDiagnoses(prev => [...prev, entry.id]);
         setNewDiagnosis({ name: '', icd10: '' });
         setShowAddDiagnosis(false);
+        showToast('Diagnosis added!');
     }
 
     async function handleAddDoctor() {
@@ -538,7 +584,230 @@ export function Consultations() {
             setFormData(prev => ({ ...prev, referred_by: data.id }));
             setNewDoctor({ full_name: '', specialization: '', phone: '', email: '' });
             setShowAddDoctor(false);
-        } catch (e) { console.error(e); alert('Failed to add referral doctor.'); setShowAddDoctor(false); }
+            showToast('Referral doctor added!');
+        } catch (e: any) { console.error(e); showToast(e.message || 'Failed to add referral doctor.', 'error'); setShowAddDoctor(false); }
+    }
+
+    /* ─── smart clinical paste & parse engine ─── */
+    function handleSmartParse() {
+        if (!smartPasteText.trim()) {
+            showToast('Please paste the clinical note text first!', 'warning');
+            return;
+        }
+
+        if (smartParseMode === 'raw') {
+            // Option 2: Raw Note Quick-Save Mode
+            setParsedResult({
+                physical_examination: '',
+                treatment_plan: '',
+                notes: smartPasteText.trim(),
+                medsMatched: []
+            });
+            showToast('Note parsed! Ready to quick-save straight into Remarks.', 'success');
+            return;
+        }
+
+        // Option 1: Intelligent Form Auto-Fill Mode
+        const lines = smartPasteText.split('\n');
+        let currentSection = '';
+        const sections: Record<string, string[]> = {};
+
+        // Initialize section arrays
+        const sectionKeys = [
+            'subjective', 'objective', 'assessment_plan', 'medical_history', 
+            'surgical_history', 'medications', 'allergies', 'family_history', 
+            'social_history', 'ros', 'vitals', 'physical_examination', 'labs', 'plan'
+        ];
+        sectionKeys.forEach(k => { sections[k] = []; });
+
+        lines.forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+
+            const lower = trimmed.toLowerCase();
+            if (lower.startsWith('subjective')) {
+                currentSection = 'subjective';
+            } else if (lower.startsWith('objective')) {
+                currentSection = 'objective';
+            } else if (lower.startsWith('assessment & plan') || lower.startsWith('assessment and plan')) {
+                currentSection = 'assessment_plan';
+            } else if (lower.startsWith('medical history')) {
+                currentSection = 'medical_history';
+            } else if (lower.startsWith('surgical history')) {
+                currentSection = 'surgical_history';
+            } else if (lower.startsWith('medications and supplements') || lower.startsWith('medications') || lower.startsWith('supplements')) {
+                currentSection = 'medications';
+            } else if (lower.startsWith('allergies')) {
+                currentSection = 'allergies';
+            } else if (lower.startsWith('family history')) {
+                currentSection = 'family_history';
+            } else if (lower.startsWith('social history')) {
+                currentSection = 'social_history';
+            } else if (lower.startsWith('review of systems') || lower.startsWith('ros')) {
+                currentSection = 'ros';
+            } else if (lower.startsWith('vital signs') || lower.startsWith('vitals')) {
+                currentSection = 'vitals';
+            } else if (lower.startsWith('physical examination') || lower.startsWith('physical exam')) {
+                currentSection = 'physical_examination';
+            } else if (lower.startsWith('labs and diagnostics') || lower.startsWith('labs') || lower.startsWith('diagnostics')) {
+                currentSection = 'labs';
+            } else if (lower.startsWith('plan')) {
+                currentSection = 'plan';
+            } else if (currentSection) {
+                sections[currentSection].push(trimmed);
+            }
+        });
+
+        const getSec = (key: string) => sections[key] || [];
+
+        // 1. Observations (Objective / Physical Exam)
+        let physExamText = '';
+        if (getSec('physical_examination').length > 0) {
+            physExamText = getSec('physical_examination').join('\n');
+        } else if (getSec('objective').length > 0) {
+            physExamText = getSec('objective').join('\n');
+        }
+
+        // 2. Treatment Plan (Assessment & Plan / Plan)
+        let treatmentPlanText = '';
+        if (getSec('assessment_plan').length > 0) {
+            treatmentPlanText = getSec('assessment_plan').join('\n');
+        } else if (getSec('plan').length > 0) {
+            treatmentPlanText = getSec('plan').join('\n');
+        }
+
+        // 3. Remarks (Subjective + Histories + Labs + Allergies)
+        let remarksText = '';
+        if (getSec('subjective').length > 0) {
+            remarksText += `=== SUBJECTIVE ===\n${getSec('subjective').join('\n')}\n\n`;
+        }
+        if (getSec('medical_history').length > 0) {
+            remarksText += `=== MEDICAL HISTORY ===\n${getSec('medical_history').join('\n')}\n\n`;
+        }
+        if (getSec('surgical_history').length > 0) {
+            remarksText += `=== SURGICAL HISTORY ===\n${getSec('surgical_history').join('\n')}\n\n`;
+        }
+        if (getSec('allergies').length > 0) {
+            remarksText += `=== ALLERGIES ===\n${getSec('allergies').join('\n')}\n\n`;
+        }
+        if (getSec('medications').length > 0) {
+            remarksText += `=== PREVIOUS MEDICATIONS ===\n${getSec('medications').join('\n')}\n\n`;
+        }
+        if (getSec('labs').length > 0) {
+            remarksText += `=== LABS & DIAGNOSTICS ===\n${getSec('labs').join('\n')}\n\n`;
+        }
+        if (getSec('family_history').length > 0) {
+            remarksText += `=== FAMILY HISTORY ===\n${getSec('family_history').join('\n')}\n\n`;
+        }
+        if (getSec('social_history').length > 0) {
+            remarksText += `=== SOCIAL HISTORY ===\n${getSec('social_history').join('\n')}\n\n`;
+        }
+        if (getSec('ros').length > 0) {
+            remarksText += `=== REVIEW OF SYSTEMS ===\n${getSec('ros').join('\n')}\n\n`;
+        }
+
+        // 4. Fuzzy Matching Medications
+        const matchedMeds: { name: string; dosage?: string; instructions?: string; medicine_id: string }[] = [];
+        const medicationsTextLines = [
+            ...getSec('medications'),
+            ...getSec('assessment_plan'),
+            ...getSec('plan')
+        ];
+
+        medicationsTextLines.forEach(line => {
+            const cleanLine = line.replace(/^[-*•+]\s*/, '').trim();
+            if (!cleanLine) return;
+
+            medicines.forEach(med => {
+                const medNameEscaped = med.name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                const regex = new RegExp(`\\b${medNameEscaped}\\b`, 'i');
+                if (regex.test(cleanLine)) {
+                    if (matchedMeds.some(m => m.medicine_id === med.id)) return;
+
+                    const dosageMatch = cleanLine.match(/(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|tabs|puffs|units))/i);
+                    const dosage = dosageMatch ? dosageMatch[1] : med.dosage;
+
+                    let instructions = cleanLine;
+                    if (dosageMatch) {
+                        instructions = cleanLine.substring(cleanLine.indexOf(dosageMatch[1]) + dosageMatch[1].length).trim();
+                    } else {
+                        instructions = cleanLine.replace(regex, '').trim();
+                    }
+
+                    instructions = instructions.replace(/^[^a-zA-Z0-9]+/, '').trim();
+
+                    matchedMeds.push({
+                        name: med.name,
+                        dosage: dosage || undefined,
+                        instructions: instructions || undefined,
+                        medicine_id: med.id
+                    });
+                }
+            });
+        });
+
+        setParsedResult({
+            physical_examination: physExamText.trim(),
+            treatment_plan: treatmentPlanText.trim(),
+            notes: remarksText.trim(),
+            medsMatched: matchedMeds
+        });
+
+        showToast(`Pasted note parsed! Found ${matchedMeds.length} matched prescriptions.`, 'success');
+    }
+
+    function handleApplySmartPaste() {
+        if (!parsedResult) return;
+
+        if (smartParseMode === 'raw') {
+            setFormData(prev => ({
+                ...prev,
+                notes: parsedResult.notes
+            }));
+            showToast('Pasted clinical report saved raw in Remarks!', 'success');
+        } else {
+            setFormData(prev => ({
+                ...prev,
+                physical_examination: parsedResult.physical_examination || prev.physical_examination,
+                treatment_plan: parsedResult.treatment_plan || prev.treatment_plan,
+                notes: parsedResult.notes || prev.notes
+            }));
+
+            if (parsedResult.medsMatched.length > 0) {
+                const newPrescriptionsList: Prescription[] = parsedResult.medsMatched.map(mm => {
+                    let advice = mm.instructions || '';
+                    if (mm.dosage && mm.dosage !== medicines.find(m => m.id === mm.medicine_id)?.dosage) {
+                        advice = `${mm.dosage} ${advice}`.trim();
+                    }
+
+                    let period = '30';
+                    let timeUnit = 'Days';
+                    if (advice.toLowerCase().includes('weekly') || advice.toLowerCase().includes('week')) {
+                        period = '4';
+                        timeUnit = 'Weeks';
+                    }
+
+                    return {
+                        medicine_id: mm.medicine_id,
+                        period: period,
+                        time_unit: timeUnit,
+                        advice: advice || 'As directed'
+                    };
+                });
+
+                setPrescriptions(prev => {
+                    const filteredPrev = prev.filter(p => !newPrescriptionsList.some(np => np.medicine_id === p.medicine_id));
+                    return [...filteredPrev, ...newPrescriptionsList];
+                });
+            }
+
+            showToast('Form populated successfully! Review and correct any details.', 'success');
+        }
+
+        // Collapse smart paste panel
+        setShowSmartPastePanel(false);
+        setSmartPasteText('');
+        setParsedResult(null);
     }
 
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
@@ -549,9 +818,34 @@ export function Consultations() {
             supabase.from('branches').select('*').eq('id', profile.branch_id).maybeSingle()
                 .then(({ data }) => setBranch(data));
         }
-    }, [profile?.branch_id]);
+        // super_admin has no branch_id — branch stays null, print view shows without branch header
+    }, [profile?.id]);
 
     /* ─── helpers ─── */
+    function resolveComplaints(val?: string) {
+        if (!val) return '—';
+        return val.split(', ').map(part => {
+            const found = complaints.find(c => c.id === part.trim());
+            return found ? found.label : part;
+        }).join(', ');
+    }
+
+    function resolveInvestigations(val?: string) {
+        if (!val) return '—';
+        return val.split(', ').map(part => {
+            const found = investigations.find(i => i.id === part.trim());
+            return found ? found.label : part;
+        }).join(', ');
+    }
+
+    function resolveDiagnosis(val?: string) {
+        if (!val) return '—';
+        return val.split(', ').map(part => {
+            const found = diagnoses.find(d => d.id === part.trim());
+            return found ? found.label : part;
+        }).join(', ');
+    }
+
     function resetForm() {
         setFormData({ patient_id: '', diagnosis: '', physical_examination: '', treatment_plan: '', notes: '', status: 'completed', referred_by: '', follow_up_period: '', follow_up_time: '', follow_up_date: '' });
         setSelectedComplaints([]); setSelectedInvestigations([]); setSelectedDiagnoses([]);
@@ -581,7 +875,10 @@ export function Consultations() {
 
     const filteredConsultations = consultations.filter(c => {
         const patientOk = !filterPatient || c.patient?.full_name.toLowerCase().includes(filterPatient.toLowerCase()) || c.patient?.patient_number.toLowerCase().includes(filterPatient.toLowerCase());
-        const diagOk = !filterDiagnosis || c.diagnosis?.toLowerCase().includes(filterDiagnosis.toLowerCase());
+        const diagOk = !filterDiagnosis || 
+            c.diagnosis?.toLowerCase().includes(filterDiagnosis.toLowerCase()) ||
+            c.notes?.toLowerCase().includes(filterDiagnosis.toLowerCase()) ||
+            c.chief_complaint?.toLowerCase().includes(filterDiagnosis.toLowerCase());
         const docOk = !filterDoctor || c.doctor?.full_name?.toLowerCase().includes(filterDoctor.toLowerCase());
         const statusOk = !filterStatus || c.status === filterStatus;
         const dateFrom = filterDateFrom ? new Date(filterDateFrom) : null;
@@ -650,8 +947,8 @@ export function Consultations() {
                 c.patient?.patient_number || '',
                 new Date(c.created_at).toLocaleDateString(),
                 `Dr. ${c.doctor?.full_name || ''}`,
-                (c.chief_complaint || '').substring(0, 40),
-                (c.diagnosis || '').substring(0, 40),
+                resolveComplaints(c.chief_complaint).substring(0, 40),
+                resolveDiagnosis(c.diagnosis).substring(0, 40),
                 c.status || '',
             ]),
             styles: { fontSize: 8, cellPadding: 2 },
@@ -668,8 +965,8 @@ export function Consultations() {
                 <td><strong>${c.patient?.full_name}</strong><br/><small>${c.patient?.patient_number}</small></td>
                 <td>${new Date(c.created_at).toLocaleDateString()}</td>
                 <td>Dr. ${c.doctor?.full_name || ''}</td>
-                <td>${(c.chief_complaint || '').substring(0, 50)}</td>
-                <td>${(c.diagnosis || '').substring(0, 50)}</td>
+                <td>${resolveComplaints(c.chief_complaint).substring(0, 50)}</td>
+                <td>${resolveDiagnosis(c.diagnosis).substring(0, 50)}</td>
                 <td>${c.treatment_plan || ''}</td>
                 <td><span style="padding:2px 8px;border-radius:999px;font-size:10px;font-weight:bold;background:${c.status === 'completed' ? '#dcfce7' : '#fef3c7'};color:${c.status === 'completed' ? '#166534' : '#92400e'}">${c.status}</span></td>
             </tr>`);
@@ -696,21 +993,35 @@ export function Consultations() {
     if (viewMode === 'detailed' && viewConsultation && branch) {
         return (
             <ConsultationPrintView
-                consultation={viewConsultation as any}
+                consultation={{
+                    ...viewConsultation,
+                    chief_complaint: resolveComplaints(viewConsultation.chief_complaint),
+                    diagnosis: resolveDiagnosis(viewConsultation.diagnosis),
+                    investigations: resolveInvestigations(viewConsultation.investigations)
+                } as any}
                 branch={branch}
-                onBack={() => setViewMode('table')}
+                onBack={() => {
+                    setViewConsultation(null);
+                    setViewMode('table');
+                }}
                 onEdit={() => {
                     setEditConsultation(viewConsultation);
-                    setEditForm(viewConsultation);
+                    setEditForm({
+                        ...viewConsultation,
+                        chief_complaint: resolveComplaints(viewConsultation.chief_complaint),
+                        diagnosis: resolveDiagnosis(viewConsultation.diagnosis)
+                    });
+                    setViewConsultation(null);
                     setViewMode('table');
                 }}
                 onAddNew={() => {
                     resetForm();
+                    setViewConsultation(null);
                     setViewMode('table');
                     setShowModal(true); // Assuming setShowModal is the state for the add consultation form
                 }}
                 onSendEmail={() => {
-                    alert('Send Email functionality coming soon!');
+                    showToast('Send Email functionality coming soon!', 'info');
                 }}
             />
         );
@@ -775,9 +1086,62 @@ export function Consultations() {
                     <p className="text-gray-500">No consultations match your filters</p>
                 </div>
             ) : (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
+                <>
+                    {/* 📱 Mobile Consultation Cards (< md) */}
+                    <div className="md:hidden space-y-3">
+                {paginated.map((c, idx) => (
+                    <div key={c.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{c.patient?.full_name || 'Unknown Patient'}</h3>
+                                <p className="text-xs text-gray-500 font-mono">
+                                    ID: {c.patient?.patient_number ? c.patient.patient_number.split('-')[0] : 'N/A'}
+                                </p>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${c.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {c.status}
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Date</span>
+                                <span className="font-semibold text-gray-900 dark:text-white">{new Date(c.created_at).toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">{c.doctor?.full_name || 'Dr. Medical Staff'}</span>
+                            </div>
+                        </div>
+
+                        {c.diagnosis && (
+                            <div className="text-xs bg-blue-50 dark:bg-blue-950/30 p-2 rounded-lg text-blue-900 dark:text-blue-200">
+                                <span className="font-bold text-[10px] uppercase block text-blue-400">Diagnosis</span>
+                                {resolveDiagnosis(c.diagnosis)}
+                            </div>
+                        )}
+
+                        <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                            <button
+                                onClick={() => handleViewDetailed(c)}
+                                className="flex items-center space-x-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold"
+                            >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Report</span>
+                            </button>
+                            <div className="flex items-center space-x-1">
+                                <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: resolveComplaints(c.chief_complaint), diagnosis: resolveDiagnosis(c.diagnosis), physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => window.location.href = `/bills?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Invoice"><Receipt className="w-4 h-4" /></button>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* 💻 Desktop Table View (>= md) */}
+            <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
                             <thead>
                                 <tr className="bg-blue-600 text-white text-xs uppercase tracking-wide">
                                     <th className="px-4 py-3 text-left border-r border-blue-500 w-8">#</th>
@@ -793,7 +1157,7 @@ export function Consultations() {
                             </thead>
                             <tbody>
                                 {paginated.map((c, idx) => (
-                                    <tr key={c.id} className={`border-b border-gray-200 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700/50 transition-colors ${idx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-800/60'}`}>
+                                    <tr key={c.id} className={`border-b border-gray-200 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700/50 transition-colors ${idx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-100 dark:bg-gray-800/60'}`}>
                                         <td className="px-4 py-3 text-gray-500 border-r border-gray-200 dark:border-gray-700 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
                                         <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700">
                                             <p className="font-semibold text-gray-900 dark:text-white">{c.patient?.full_name}</p>
@@ -802,10 +1166,10 @@ export function Consultations() {
                                         <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 whitespace-nowrap text-xs text-gray-600 dark:text-gray-400">{new Date(c.created_at).toLocaleDateString()}</td>
                                         <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-700 dark:text-gray-300">Dr. {c.doctor?.full_name}</td>
                                         <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 max-w-[160px]">
-                                            <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={c.chief_complaint}>{c.chief_complaint || '—'}</p>
+                                            <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={resolveComplaints(c.chief_complaint)}>{resolveComplaints(c.chief_complaint)}</p>
                                         </td>
                                         <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 max-w-[160px]">
-                                            <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={c.diagnosis}>{c.diagnosis || '—'}</p>
+                                            <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={resolveDiagnosis(c.diagnosis)}>{resolveDiagnosis(c.diagnosis)}</p>
                                         </td>
                                         <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
                                             {c.follow_up_period ? `${c.follow_up_period} ${c.follow_up_time}` : '—'}
@@ -822,8 +1186,8 @@ export function Consultations() {
                                                 >
                                                     <Eye className="w-4 h-4" />
                                                 </button>
-                                                <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: c.chief_complaint, diagnosis: c.diagnosis, physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                                                <button onClick={() => window.location.href = `/invoices?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg" title="Invoice"><Receipt className="w-3.5 h-3.5" /></button>
+                                                <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: resolveComplaints(c.chief_complaint), diagnosis: resolveDiagnosis(c.diagnosis), physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                                                <button onClick={() => window.location.href = `/bills?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg" title="Invoice / Bill"><Receipt className="w-3.5 h-3.5" /></button>
                                                 <button onClick={() => setDeleteId(c.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                                             </div>
                                         </td>
@@ -859,6 +1223,7 @@ export function Consultations() {
                         </div>
                     </div>
                 </div>
+                </>
             )}
 
             {/* ── View Modal ── */}
@@ -878,9 +1243,9 @@ export function Consultations() {
                                 { label: 'Doctor', val: `Dr. ${viewConsultation.doctor?.full_name}` },
                                 { label: 'Date', val: new Date(viewConsultation.created_at).toLocaleString() },
                                 { label: 'Status', val: viewConsultation.status },
-                                { label: 'Main Complaints', val: viewConsultation.chief_complaint },
-                                { label: 'Diagnosis', val: viewConsultation.diagnosis },
-                                { label: 'Investigations', val: viewConsultation.investigations },
+                                { label: 'Main Complaints', val: resolveComplaints(viewConsultation.chief_complaint) },
+                                { label: 'Diagnosis', val: resolveDiagnosis(viewConsultation.diagnosis) },
+                                { label: 'Investigations', val: resolveInvestigations(viewConsultation.investigations) },
                                 { label: 'Observations', val: viewConsultation.physical_examination },
                                 { label: 'Treatment Plan', val: viewConsultation.treatment_plan },
                                 { label: 'Remarks', val: viewConsultation.notes },
@@ -888,13 +1253,13 @@ export function Consultations() {
                             ].map(r => r.val ? (
                                 <div key={r.label} className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 border border-gray-200 dark:border-gray-700">
                                     <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">{r.label}</p>
-                                    <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{r.val}</p>
+                                    <div className="text-sm text-gray-800 dark:text-gray-200">{renderHtmlOrText(r.val)}</div>
                                 </div>
                             ) : null)}
                         </div>
                         <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-700 flex gap-3">
                             <button onClick={() => setViewConsultation(null)} className="flex-1 py-2 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Close</button>
-                            <button onClick={() => { setEditConsultation(viewConsultation); setEditForm({ chief_complaint: viewConsultation.chief_complaint, diagnosis: viewConsultation.diagnosis, physical_examination: viewConsultation.physical_examination, treatment_plan: viewConsultation.treatment_plan, notes: viewConsultation.notes, status: viewConsultation.status, follow_up_period: viewConsultation.follow_up_period, follow_up_time: viewConsultation.follow_up_time, follow_up_date: viewConsultation.follow_up_date }); setViewConsultation(null); }} className="flex-1 py-2 bg-amber-500 text-white rounded-lg text-sm font-bold hover:bg-amber-600 flex items-center justify-center gap-2"><Pencil className="w-4 h-4" /> Edit</button>
+                            <button onClick={() => { setEditConsultation(viewConsultation); setEditForm({ chief_complaint: resolveComplaints(viewConsultation.chief_complaint), diagnosis: resolveDiagnosis(viewConsultation.diagnosis), physical_examination: viewConsultation.physical_examination, treatment_plan: viewConsultation.treatment_plan, notes: viewConsultation.notes, status: viewConsultation.status, follow_up_period: viewConsultation.follow_up_period, follow_up_time: viewConsultation.follow_up_time, follow_up_date: viewConsultation.follow_up_date }); setViewConsultation(null); }} className="flex-1 py-2 bg-amber-500 text-white rounded-lg text-sm font-bold hover:bg-amber-600 flex items-center justify-center gap-2"><Pencil className="w-4 h-4" /> Edit</button>
                         </div>
                     </div>
                 </div>
@@ -966,6 +1331,209 @@ export function Consultations() {
                         </div>
 
                         <form onSubmit={handleSubmit} className="p-6 space-y-5">
+
+                            {/* ✨ AI note parser ✨ */}
+                            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-gray-900/60 dark:to-blue-950/20 border border-blue-200 dark:border-blue-800/80 rounded-xl p-4 shadow-sm">
+                                {!showSmartPastePanel ? (
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <span className="flex h-2.5 w-2.5 relative animate-pulse">
+                                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
+                                            </span>
+                                            <p className="text-sm font-bold text-blue-900 dark:text-blue-200">
+                                                {!formData.patient_id 
+                                                    ? "⚠️ Please select a patient first to enable AI Note Smart-Paste."
+                                                    : "Have an AI generated consultation note (e.g. Freed AI)?"
+                                                }
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            disabled={!formData.patient_id}
+                                            onClick={() => setShowSmartPastePanel(true)}
+                                            className={`px-3.5 py-1.5 text-white rounded-lg text-xs font-black uppercase tracking-wider transition shadow-sm ${
+                                                !formData.patient_id 
+                                                    ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed' 
+                                                    : 'bg-blue-600 hover:bg-blue-700'
+                                            }`}
+                                        >
+                                            ✨ Smart-Paste Note
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center pb-2 border-b border-blue-100 dark:border-blue-800/60">
+                                            <div className="flex items-center gap-2">
+                                                <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-pulse" />
+                                                <h3 className="font-extrabold text-blue-900 dark:text-blue-200 text-sm">AI Note Smart-Paste Parser</h3>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setShowSmartPastePanel(false);
+                                                    setSmartPasteText('');
+                                                    setParsedResult(null);
+                                                }}
+                                                className="text-gray-400 hover:text-rose-500 transition"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+
+                                        {/* Toggle parsing mode */}
+                                        <div className="flex gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg max-w-md">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSmartParseMode('autofill');
+                                                    setParsedResult(null);
+                                                }}
+                                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-md transition ${
+                                                    smartParseMode === 'autofill'
+                                                        ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-white shadow-sm'
+                                                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                                                }`}
+                                            >
+                                                ⚡ Auto-Fill Form &amp; Edit
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSmartParseMode('raw');
+                                                    setParsedResult(null);
+                                                }}
+                                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-md transition ${
+                                                    smartParseMode === 'raw'
+                                                        ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-white shadow-sm'
+                                                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                                                }`}
+                                            >
+                                                📝 Quick-Save Raw Note
+                                            </button>
+                                        </div>
+
+                                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                                            {smartParseMode === 'autofill'
+                                                ? 'Automatically splits and populates pasted note sections into distinct text fields (Observations, Treatment Plan, Remarks, Prescriptions) for manual editing.'
+                                                : 'Saves the entire copy-pasted clinical text raw as a single complete block into the Remarks notes field.'}
+                                        </p>
+
+                                        {/* Textarea Input */}
+                                        <div className="space-y-1">
+                                            <label className="block text-[10px] font-extrabold text-blue-700 dark:text-blue-300 uppercase tracking-widest">
+                                                Paste Note Content
+                                            </label>
+                                            <textarea
+                                                value={smartPasteText}
+                                                onChange={e => {
+                                                    setSmartPasteText(e.target.value);
+                                                    setParsedResult(null);
+                                                }}
+                                                placeholder="Paste your copied clinical note here (e.g. including Subjective, Objective, Assessment & Plan headers)..."
+                                                className="w-full px-3 py-2 border border-blue-200 dark:border-blue-800 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-xs resize-none font-mono"
+                                                rows={8}
+                                            />
+                                        </div>
+
+                                        {/* Actions */}
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={handleSmartParse}
+                                                className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-xs font-black uppercase tracking-wider hover:bg-blue-700 transition shadow-sm"
+                                            >
+                                                ⚡ Parse Note &amp; Preview
+                                            </button>
+                                        </div>
+
+                                        {/* Parsed Result Preview */}
+                                        {parsedResult && (
+                                            <div className="bg-white dark:bg-gray-800 border border-blue-100 dark:border-blue-800 rounded-xl p-4 space-y-4 shadow-inner">
+                                                <h4 className="font-extrabold text-gray-800 dark:text-white text-xs uppercase tracking-wider">
+                                                    Parsed Note Results Preview
+                                                </h4>
+
+                                                {smartParseMode === 'autofill' ? (
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                        <div className="border border-green-100 dark:border-green-800/40 rounded-lg p-3 bg-green-50/20">
+                                                            <p className="text-[10px] font-black text-green-700 dark:text-green-400 uppercase tracking-wider mb-1">
+                                                                Observations Extracted
+                                                            </p>
+                                                            <p className="text-xs text-gray-600 dark:text-gray-300 font-bold">
+                                                                {parsedResult.physical_examination
+                                                                    ? `${parsedResult.physical_examination.length} characters matched`
+                                                                    : 'No explicit Objective/Exam parsed'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="border border-green-100 dark:border-green-800/40 rounded-lg p-3 bg-green-50/20">
+                                                            <p className="text-[10px] font-black text-green-700 dark:text-green-400 uppercase tracking-wider mb-1">
+                                                                Treatment Plan Extracted
+                                                            </p>
+                                                            <p className="text-xs text-gray-600 dark:text-gray-300 font-bold">
+                                                                {parsedResult.treatment_plan
+                                                                    ? `${parsedResult.treatment_plan.length} characters matched`
+                                                                    : 'No explicit Assessment/Plan parsed'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="border border-green-100 dark:border-green-800/40 rounded-lg p-3 bg-green-50/20">
+                                                            <p className="text-[10px] font-black text-green-700 dark:text-green-400 uppercase tracking-wider mb-1">
+                                                                Remarks &amp; History compiled
+                                                            </p>
+                                                            <p className="text-xs text-gray-600 dark:text-gray-300 font-bold">
+                                                                {parsedResult.notes
+                                                                    ? `${parsedResult.notes.length} characters compiled`
+                                                                    : 'No Subjective/History items found'}
+                                                            </p>
+                                                        </div>
+
+                                                        {/* Prescriptions matched */}
+                                                        <div className="md:col-span-3 border border-indigo-100 dark:border-indigo-800/40 rounded-lg p-3 bg-indigo-50/10 space-y-2">
+                                                            <p className="text-[10px] font-black text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">
+                                                                Medications Matched in Active Inventory
+                                                            </p>
+                                                            {parsedResult.medsMatched.length === 0 ? (
+                                                                <p className="text-xs text-gray-500 italic">
+                                                                    No matching inventory medicines found in note text.
+                                                                </p>
+                                                            ) : (
+                                                                <div className="flex flex-wrap gap-1.5">
+                                                                    {parsedResult.medsMatched.map((med, idx) => (
+                                                                        <span
+                                                                            key={idx}
+                                                                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800 shadow-sm"
+                                                                        >
+                                                                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                                                            {med.name} {med.dosage ? `(${med.dosage})` : ''} {med.instructions ? `· ${med.instructions}` : ''}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="border border-blue-100 dark:border-blue-800/40 rounded-lg p-3 bg-blue-50/20">
+                                                        <p className="text-[10px] font-black text-blue-700 dark:text-blue-400 uppercase tracking-wider mb-1">
+                                                            Raw Note Content Captured
+                                                        </p>
+                                                        <p className="text-xs text-gray-600 dark:text-gray-300 font-bold">
+                                                            {parsedResult.notes.length} characters of raw clinical report will be copied into Remarks notes field.
+                                                        </p>
+                                                    </div>
+                                                )}
+
+                                                <button
+                                                    type="button"
+                                                    onClick={handleApplySmartPaste}
+                                                    className="w-full py-2.5 bg-emerald-600 text-white rounded-lg text-xs font-black uppercase tracking-wider hover:bg-emerald-700 transition shadow-md flex items-center justify-center gap-2"
+                                                >
+                                                    ✨ Apply &amp; Populate Consultation Form
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
 
                             {/* Patient */}
                             <SearchDropdown
@@ -1373,7 +1941,7 @@ export function Consultations() {
                                             ].map(item => item.value ? (
                                                 <div key={item.label} className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
                                                     <p className="text-xs font-bold text-gray-500 uppercase mb-1">{item.label}</p>
-                                                    <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{item.value}</p>
+                                                    <div className="text-sm text-gray-800 dark:text-gray-200">{renderHtmlOrText(item.value)}</div>
                                                 </div>
                                             ) : null)}
                                         </div>
@@ -1460,7 +2028,7 @@ export function Consultations() {
                                                         ].map(r => r.val ? (
                                                             <div key={r.label} className="mt-2">
                                                                 <p className="text-[10px] text-gray-400 uppercase font-bold">{r.label}</p>
-                                                                <p className="text-sm text-gray-700 dark:text-gray-300">{r.val}</p>
+                                                                <div className="text-sm text-gray-700 dark:text-gray-300">{renderHtmlOrText(r.val)}</div>
                                                             </div>
                                                         ) : null)}
                                                     </div>
@@ -1491,7 +2059,7 @@ export function Consultations() {
                                                         ].map(r => r.val ? (
                                                             <div key={r.label} className="mt-2">
                                                                 <p className="text-[10px] text-gray-400 uppercase font-bold">{r.label}</p>
-                                                                <p className="text-sm text-gray-700 dark:text-gray-300">{r.val}</p>
+                                                                <div className="text-sm text-gray-700 dark:text-gray-300">{renderHtmlOrText(r.val)}</div>
                                                             </div>
                                                         ) : null)}
                                                     </div>

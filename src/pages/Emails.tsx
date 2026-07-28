@@ -4,13 +4,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { 
     Mail, Send, History, Plus, Search, 
     Eye, Trash2, CheckCircle2, 
-    AlertCircle, Clock, Copy, Edit, X, Save,
+    AlertCircle, Clock, Edit, X, Save,
     ChevronLeft, ChevronRight, Layout
 } from 'lucide-react';
 
 interface EmailTemplate {
     id: string;
+    branch_id: string;
     name: string;
+    trigger_type?: string;
     subject: string;
     body: string;
     category: string;
@@ -52,17 +54,20 @@ export function Emails() {
     });
 
     const [templateForm, setTemplateForm] = useState({
+        id: '',
         name: '',
+        trigger_type: '',
         subject: '',
         body: '',
-        category: 'general'
+        category: 'general',
+        is_active: true
     });
 
     useEffect(() => {
-        if (profile?.branch_id) {
+        if (profile) {
             loadAll();
         }
-    }, [profile?.branch_id]);
+    }, [profile?.id]);
 
     const loadAll = async () => {
         setLoading(true);
@@ -71,20 +76,20 @@ export function Emails() {
     };
 
     const loadLogs = async () => {
-        const { data } = await supabase
-            .from('email_logs')
-            .select('*')
-            .eq('branch_id', profile?.branch_id)
-            .order('sent_at', { ascending: false });
+        let query = supabase.from('email_logs').select('*');
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('sent_at', { ascending: false });
         if (data) setLogs(data);
     };
 
     const loadTemplates = async () => {
-        const { data } = await supabase
-            .from('email_templates')
-            .select('*')
-            .eq('branch_id', profile?.branch_id)
-            .order('name');
+        let query = supabase.from('email_templates').select('*');
+        if (profile?.branch_id) {
+            query = query.eq('branch_id', profile.branch_id);
+        }
+        const { data } = await query.order('name');
         if (data) setTemplates(data);
     };
 
@@ -120,21 +125,66 @@ export function Emails() {
         e.preventDefault();
         setLoading(true);
         try {
-            const { error } = await supabase.from('email_templates').insert({
+            const payload = {
                 branch_id: profile?.branch_id,
-                ...templateForm,
-                placeholders: [] // Could be parsed from body later
-            });
+                name: templateForm.name,
+                trigger_type: templateForm.trigger_type || null,
+                subject: templateForm.subject,
+                body: templateForm.body,
+                category: templateForm.category,
+                is_active: templateForm.is_active,
+                placeholders: []
+            };
 
-            if (error) throw error;
+            if (templateForm.id) {
+                const { error } = await supabase
+                    .from('email_templates')
+                    .update(payload)
+                    .eq('id', templateForm.id);
+                if (error) throw error;
+            } else {
+                const { error } = await supabase
+                    .from('email_templates')
+                    .insert([payload]);
+                if (error) throw error;
+            }
+
             setShowTemplateModal(false);
-            setTemplateForm({ name: '', subject: '', body: '', category: 'general' });
+            setTemplateForm({ id: '', name: '', trigger_type: '', subject: '', body: '', category: 'general', is_active: true });
             loadTemplates();
             alert('Template saved successfully!');
         } catch (error: any) {
             alert(error.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const toggleTemplateStatus = async (template: EmailTemplate) => {
+        try {
+            const { error } = await supabase
+                .from('email_templates')
+                .update({ is_active: !template.is_active })
+                .eq('id', template.id);
+
+            if (error) throw error;
+            loadTemplates();
+        } catch (error: any) {
+            alert(error.message);
+        }
+    };
+
+    const deleteTemplate = async (id: string) => {
+        if (!confirm('Are you sure you want to delete this template?')) return;
+        try {
+            const { error } = await supabase
+                .from('email_templates')
+                .delete()
+                .eq('id', id);
+            if (error) throw error;
+            loadTemplates();
+        } catch (error: any) {
+            alert(error.message);
         }
     };
 
@@ -159,7 +209,10 @@ export function Emails() {
                 </div>
                 <div className="flex gap-2">
                     <button 
-                        onClick={() => setShowTemplateModal(true)}
+                        onClick={() => {
+                            setTemplateForm({ id: '', name: '', trigger_type: '', subject: '', body: '', category: 'general', is_active: true });
+                            setShowTemplateModal(true);
+                        }}
                         className="flex items-center gap-2 px-4 py-2 border border-blue-200 dark:border-blue-900 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition font-medium"
                     >
                         <Plus className="w-4 h-4" />
@@ -210,7 +263,7 @@ export function Emails() {
 
                 {activeTab === 'logs' ? (
                     <div className="overflow-x-auto">
-                        <table className="w-full">
+                        <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
                             <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
                                 <tr>
                                     <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Recipient</th>
@@ -238,7 +291,7 @@ export function Emails() {
                                     </tr>
                                 )}
                                 {paginatedLogs.map((log) => (
-                                    <tr key={log.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group">
+                                    <tr key={log.id} className="hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors group">
                                         <td className="px-6 py-4">
                                             <div className="flex flex-col">
                                                 <span className="text-sm font-semibold text-gray-900 dark:text-white">{log.recipient_name || 'N/A'}</span>
@@ -299,45 +352,104 @@ export function Emails() {
                         )}
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-6 bg-gray-50 dark:bg-gray-900/50">
-                        {templates.map((template) => (
-                            <div key={template.id} className="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition group h-full flex flex-col">
-                                <div className="flex justify-between items-start mb-3">
-                                    <div className={`p-2 rounded-lg ${
-                                        template.category === 'appointment' ? 'bg-amber-100 text-amber-600' :
-                                        template.category === 'billing' ? 'bg-emerald-100 text-emerald-600' :
-                                        'bg-blue-100 text-blue-600'
-                                    }`}>
-                                        <Layout className="w-5 h-5" />
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                        <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                            {templates.length === 0 ? (
+                                <div className="p-20 text-center">
+                                    <div className="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4">
+                                        <Layout className="w-8 h-8 text-gray-400" />
                                     </div>
-                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
-                                        <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md text-gray-500" title="Edit Template">
-                                            <Edit className="w-4 h-4" />
-                                        </button>
-                                        <button className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-gray-500 hover:text-red-600" title="Delete Template">
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
+                                    <h3 className="font-bold text-gray-900 dark:text-white">No Templates Found</h3>
+                                    <p className="text-sm text-gray-500">Create your first email template to get started.</p>
+                                </div>
+                            ) : (
+                                templates.map((template) => (
+                                    <div key={template.id} className={`p-6 flex items-start justify-between hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors ${!template.is_active ? 'opacity-75 bg-gray-50/50' : ''}`}>
+                                        <div className="flex items-start gap-4 flex-1 min-w-0">
+                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm ${
+                                                template.category === 'appointment' ? 'bg-amber-100 text-amber-600' :
+                                                template.category === 'billing' ? 'bg-emerald-100 text-emerald-600' :
+                                                'bg-blue-100 text-blue-600'
+                                            }`}>
+                                                <Mail className="w-6 h-6" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-3 mb-1">
+                                                    <h3 className="font-black text-gray-900 dark:text-white truncate">{template.name}</h3>
+                                                    <span className={`px-2 py-0.5 text-[10px] font-black uppercase rounded tracking-wider ${
+                                                        template.category === 'appointment' ? 'bg-amber-50 text-amber-600' :
+                                                        template.category === 'billing' ? 'bg-emerald-50 text-emerald-600' :
+                                                        'bg-blue-50 text-blue-600'
+                                                    }`}>
+                                                        {template.category}
+                                                    </span>
+                                                    {template.trigger_type && (
+                                                        <span className="px-2 py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase rounded tracking-wider flex items-center gap-1">
+                                                            <Save className="w-3 h-3" />
+                                                            Trigger: {template.trigger_type.replace(/_/g, ' ')}
+                                                        </span>
+                                                    )}
+                                                    {!template.is_active && (
+                                                        <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-[10px] font-black uppercase rounded">Paused</span>
+                                                    )}
+                                                </div>
+                                                <p className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-1 truncate">{template.subject}</p>
+                                                <p className="text-xs text-gray-500 line-clamp-1 italic">"{template.body.replace(/<[^>]*>/g, ' ')}"</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-4 ml-6">
+                                            <button 
+                                                onClick={() => toggleTemplateStatus(template)}
+                                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${template.is_active ? 'bg-blue-600 shadow-lg shadow-blue-100' : 'bg-gray-300'}`}
+                                            >
+                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${template.is_active ? 'translate-x-6' : 'translate-x-1'}`} />
+                                            </button>
+                                            
+                                            <div className="h-8 w-px bg-gray-100 dark:bg-gray-700" />
+
+                                            <div className="flex items-center gap-1">
+                                                <button 
+                                                    onClick={() => {
+                                                        setComposeForm({...composeForm, subject: template.subject, body: template.body});
+                                                        setShowComposeModal(true);
+                                                    }}
+                                                    className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors group/btn" 
+                                                    title="Use Template"
+                                                >
+                                                    <Send className="w-5 h-5 group-hover/btn:scale-110 transition-transform" />
+                                                </button>
+                                                <button 
+                                                    onClick={() => {
+                                                        setTemplateForm({
+                                                            id: template.id,
+                                                            name: template.name,
+                                                            trigger_type: template.trigger_type || '',
+                                                            subject: template.subject,
+                                                            body: template.body,
+                                                            category: template.category,
+                                                            is_active: template.is_active
+                                                        });
+                                                        setShowTemplateModal(true);
+                                                    }}
+                                                    className="p-2 hover:bg-gray-100 text-gray-500 rounded-lg transition-colors" 
+                                                    title="Edit"
+                                                >
+                                                    <Edit className="w-5 h-5" />
+                                                </button>
+                                                <button 
+                                                    onClick={() => deleteTemplate(template.id)}
+                                                    className="p-2 hover:bg-rose-50 text-rose-600 rounded-lg transition-colors" 
+                                                    title="Delete"
+                                                >
+                                                    <Trash2 className="w-5 h-5" />
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                                <h3 className="font-bold text-gray-900 dark:text-white mb-1">{template.name}</h3>
-                                <p className="text-xs text-gray-500 dark:text-gray-400 font-medium uppercase tracking-wider mb-3">{template.category}</p>
-                                <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-3 mb-4 flex-1 italic">
-                                    "{template.subject}"
-                                </p>
-                                <div className="pt-4 border-t border-gray-100 dark:border-gray-700">
-                                    <button 
-                                        onClick={() => {
-                                            setComposeForm({...composeForm, subject: template.subject, body: template.body});
-                                            setShowComposeModal(true);
-                                        }}
-                                        className="w-full py-2 bg-gray-50 dark:bg-gray-700/50 hover:bg-blue-600 hover:text-white text-gray-600 dark:text-gray-300 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2"
-                                    >
-                                        <Copy className="w-4 h-4" />
-                                        Use Template
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
+                                ))
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
@@ -364,7 +476,7 @@ export function Emails() {
                                         value={composeForm.recipient_name}
                                         onChange={e => setComposeForm({...composeForm, recipient_name: e.target.value})}
                                         className="w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="e.g. John Doe"
+                                        placeholder="e.g. Collen Hunters"
                                     />
                                 </div>
                                 <div>
@@ -375,7 +487,7 @@ export function Emails() {
                                         value={composeForm.recipient_email}
                                         onChange={e => setComposeForm({...composeForm, recipient_email: e.target.value})}
                                         className="w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="john@example.com"
+                                        placeholder="collen@example.com"
                                     />
                                 </div>
                             </div>
@@ -465,8 +577,22 @@ export function Emails() {
                                     >
                                         <option value="general">General</option>
                                         <option value="appointment">Appointment</option>
-                                        <option value="billing">Billing & Invoices</option>
+                                        <option value="billing">Billing & Bills</option>
                                         <option value="clinical">Clinical Reports</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-1">System Trigger (Auto-send)</label>
+                                    <select 
+                                        value={templateForm.trigger_type}
+                                        onChange={e => setTemplateForm({...templateForm, trigger_type: e.target.value})}
+                                        className="w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold"
+                                    >
+                                        <option value="">None (Manual Only)</option>
+                                        <option value="appointment_booked">Appointment Booked</option>
+                                        <option value="appointment_confirmed">Appointment Confirmed</option>
+                                        <option value="payment_received">Payment Received</option>
+                                        <option value="patient_registered">Patient Registered</option>
                                     </select>
                                 </div>
                             </div>
@@ -491,10 +617,20 @@ export function Emails() {
                                     className="w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                                     placeholder="Write template content..."
                                 />
-                                <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
+                                 <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
                                     <p className="text-[11px] text-blue-700 dark:text-blue-400 leading-relaxed font-medium">
-                                        Note: You can use placeholders like {"{{patient_name}}"}, {"{{date}}"}, and {"{{time}}"} in your body. They will be replaced automatically when using the template.
+                                        Note: You can use placeholders like {"{patient_name}"}, {"{doctor_name}"}, {"{date}"}, and {"{time}"} in your subject or body. They will be replaced automatically.
                                     </p>
+                                </div>
+                                <div className="flex items-center gap-3 py-2">
+                                    <input 
+                                        type="checkbox"
+                                        id="tm_active"
+                                        checked={templateForm.is_active}
+                                        onChange={e => setTemplateForm({...templateForm, is_active: e.target.checked})}
+                                        className="w-4 h-4 text-blue-600 rounded"
+                                    />
+                                    <label htmlFor="tm_active" className="text-sm font-bold text-gray-700 dark:text-gray-300">Template is active</label>
                                 </div>
                             </div>
                             <div className="flex gap-3 pt-4">

@@ -340,7 +340,7 @@ export function ReferralDoctors() {
                 </tr>
               ) : (
                 filteredDoctors.map((doctor) => (
-                  <tr key={doctor.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                  <tr key={doctor.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                     <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
                       <div className="flex items-center">
                         <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">

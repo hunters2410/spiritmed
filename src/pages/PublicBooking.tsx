@@ -56,14 +56,19 @@ export function PublicBooking() {
     };
 
     const checkBookingStatus = async () => {
-        const { data } = await supabase
-            .from('system_settings')
-            .select('value')
-            .eq('setting_key', 'online_booking_enabled')
-            .single();
+        try {
+            const { data } = await supabase
+                .from('system_settings')
+                .select('value')
+                .eq('setting_key', 'online_booking_enabled')
+                .maybeSingle(); // maybeSingle() returns null (not error) when row doesn't exist
 
-        if (data && data.value === false) {
-            setIsBookingEnabled(false);
+            if (data && data.value === false) {
+                setIsBookingEnabled(false);
+            }
+            // If no row exists, default to enabled (isBookingEnabled starts as true)
+        } catch (err) {
+            console.warn('Could not check booking status, defaulting to enabled:', err);
         }
     };
 
@@ -163,7 +168,6 @@ export function PublicBooking() {
     if (!isBookingEnabled) {
         return (
             <div style={containerStyle} className="min-h-screen bg-white flex items-center justify-center p-4">
-                <style>@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap');</style>
                 <div className="max-w-xs w-full text-center border p-6 rounded-lg">
                     <AlertCircle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
                     <h2 className="font-bold">Bookings Closed</h2>
@@ -176,7 +180,6 @@ export function PublicBooking() {
     if (success) {
         return (
             <div style={containerStyle} className="min-h-screen bg-white flex items-center justify-center p-4">
-                <style>@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap');</style>
                 <div className="max-w-xs w-full text-center border p-8 rounded-xl shadow-sm">
                     <CheckCircle className="w-10 h-10 text-green-500 mx-auto mb-4" />
                     <h2 className="text-lg font-bold">Booking Sent</h2>
@@ -270,14 +273,17 @@ export function PublicBooking() {
                             </div>
                         ) : (
                             <div className="animate-in fade-in duration-300">
-                                <div className="space-y-1">
-                                    <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Search Patient ID</label>
-                                    <div className="relative">
-                                        <input required type="text" placeholder="E.g. P1000" className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded text-xs bg-green-50/20 font-bold outline-none border-green-200 text-gray-900" value={formData.patient_id} onChange={(e) => setFormData({ ...formData, patient_id: e.target.value })} />
-                                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-green-600" />
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Full Name</label>
+                                        <input required type="text" placeholder="As registered..." className="w-full px-3 py-1.5 border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-green-500 text-gray-900" value={formData.patient_full_name} onChange={(e) => setFormData({ ...formData, patient_full_name: e.target.value })} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest block">Phone Number</label>
+                                        <input required type="tel" placeholder="Registered phone..." className="w-full px-3 py-1.5 border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-green-500 text-gray-900" value={formData.patient_phone} onChange={(e) => setFormData({ ...formData, patient_phone: e.target.value })} />
                                     </div>
                                 </div>
-                                <p className="text-[9px] text-gray-400 mt-2 italic">Use the ID assigned to you during your previous visit.</p>
+                                <p className="text-[9px] text-gray-400 mt-2 italic">Use the name and phone number from your previous visit — we'll find your record automatically.</p>
                             </div>
                         )}
                     </div>

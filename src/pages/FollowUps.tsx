@@ -35,7 +35,7 @@ export function FollowUps() {
 
   useEffect(() => {
     loadFollowUps();
-  }, [profile?.branch_id]);
+  }, [profile?.id]);
 
   async function loadFollowUps() {
     if (!profile?.branch_id) return;
@@ -135,7 +135,7 @@ export function FollowUps() {
               </tr>
             ) : (
               paginated.map((item) => (
-                <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors">
+                <tr key={item.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-semibold text-gray-900 dark:text-white">{item.patients?.full_name}</div>
                     <div className="text-xs text-gray-400 font-mono tracking-tighter uppercase">{item.patients?.patient_number}</div>
