@@ -1,5 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
-import { AlertTriangle, RefreshCw, LayoutDashboard } from 'lucide-react';
+import { RefreshCw, LayoutDashboard, WifiOff } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
@@ -10,22 +10,28 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
-  errorInfo: ErrorInfo | null;
+  retryCount: number;
+  isAutoRetrying: boolean;
 }
+
+const MAX_AUTO_RETRIES = 1;
+const AUTO_RETRY_DELAY_MS = 3000;
 
 /**
  * ErrorBoundary — wraps page content and catches any unhandled React errors.
  * Prevents a single page crash from bringing down the entire application.
  *
- * Usage:
- *   <ErrorBoundary pageName="Patients">
- *     <Patients />
- *   </ErrorBoundary>
+ * Features:
+ *  • Auto-retries once after 3 seconds (handles transient data-race errors)
+ *  • Never shows raw error messages / stack traces to end-users
+ *  • Provides manual retry + navigate-home as fallback
  */
 export class ErrorBoundary extends Component<Props, State> {
+  private autoRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null, errorInfo: null };
+    this.state = { hasError: false, error: null, retryCount: 0, isAutoRetrying: false };
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -33,19 +39,37 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    this.setState({ errorInfo });
-    // Log to console in development; swap for Sentry / LogRocket in production
-    console.error('[ErrorBoundary] Caught an error:', error, errorInfo);
+    // Only log in development — never expose to end-users
+    if (import.meta.env.DEV) {
+      console.error('[ErrorBoundary] Caught:', error, errorInfo);
+    }
+
+    // Auto-retry once after a brief delay (handles transient render failures)
+    if (this.state.retryCount < MAX_AUTO_RETRIES) {
+      this.setState({ isAutoRetrying: true });
+      this.autoRetryTimer = setTimeout(() => {
+        this.setState(prev => ({
+          hasError: false,
+          error: null,
+          retryCount: prev.retryCount + 1,
+          isAutoRetrying: false,
+        }));
+      }, AUTO_RETRY_DELAY_MS);
+    }
   }
 
-  private handleReload = () => {
-    this.setState({ hasError: false, error: null, errorInfo: null });
+  componentWillUnmount() {
+    if (this.autoRetryTimer) clearTimeout(this.autoRetryTimer);
+  }
+
+  private handleManualRetry = () => {
+    this.setState({ hasError: false, error: null, retryCount: 0, isAutoRetrying: false });
   };
 
   private handleGoHome = () => {
     window.history.pushState({}, '', '/dashboard');
     window.dispatchEvent(new PopStateEvent('popstate'));
-    this.setState({ hasError: false, error: null, errorInfo: null });
+    this.setState({ hasError: false, error: null, retryCount: 0, isAutoRetrying: false });
   };
 
   render() {
@@ -53,41 +77,40 @@ export class ErrorBoundary extends Component<Props, State> {
       return this.props.children;
     }
 
+    // Show a subtle spinner while auto-retrying
+    if (this.state.isAutoRetrying) {
+      return (
+        <div className="min-h-[60vh] flex items-center justify-center p-6">
+          <div className="text-center">
+            <div className="mx-auto w-10 h-10 animate-spin rounded-full border-4 border-green-200 border-t-green-600 mb-4" />
+            <p className="text-sm text-gray-500 dark:text-gray-400">Reconnecting…</p>
+          </div>
+        </div>
+      );
+    }
+
     const { pageName } = this.props;
-    const { error } = this.state;
 
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6">
-        <div className="bg-white dark:bg-gray-800 border border-red-200 dark:border-red-800 rounded-2xl shadow-xl p-8 max-w-lg w-full text-center">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl p-8 max-w-lg w-full text-center">
           {/* Icon */}
-          <div className="mx-auto w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-5">
-            <AlertTriangle className="w-8 h-8 text-red-600 dark:text-red-400" />
+          <div className="mx-auto w-16 h-16 bg-amber-50 dark:bg-amber-900/30 rounded-full flex items-center justify-center mb-5">
+            <WifiOff className="w-8 h-8 text-amber-600 dark:text-amber-400" />
           </div>
 
-          {/* Heading */}
+          {/* Heading — user-friendly, no technical jargon */}
           <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-            {pageName ? `"${pageName}" ran into a problem` : 'Something went wrong'}
+            {pageName ? `${pageName} couldn't load` : 'Page temporarily unavailable'}
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-            An unexpected error occurred on this page. The rest of the application is unaffected.
+            This is usually caused by a brief connection issue. Please try again — the rest of the application is working fine.
           </p>
-
-          {/* Error detail (collapsed, for developers) */}
-          {error && (
-            <details className="mb-6 text-left bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-3 cursor-pointer">
-              <summary className="text-xs font-semibold text-gray-500 dark:text-gray-400 select-none">
-                Technical details
-              </summary>
-              <pre className="mt-2 text-xs text-red-600 dark:text-red-400 overflow-auto whitespace-pre-wrap break-words">
-                {error.toString()}
-              </pre>
-            </details>
-          )}
 
           {/* Actions */}
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
-              onClick={this.handleReload}
+              onClick={this.handleManualRetry}
               className="flex items-center justify-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg transition"
             >
               <RefreshCw className="w-4 h-4" />

@@ -5,6 +5,7 @@ import {
     Check, X, User, Phone, Mail, Calendar,
     MapPin, Clock, Search, Copy
 } from 'lucide-react';
+import { getAppointmentTypeBadge, getAppointmentTypeLabel } from '../utils/appointmentUtils';
 
 interface OnlineBooking {
     id: string;
@@ -77,9 +78,9 @@ export function OnlineBookings() {
                 .from('online_bookings')
                 .select(`
                   *,
-                  branches:branch_id (name),
-                  users:doctor_id (full_name),
-                  appointment_slots:slot_id (start_time)
+                  branches:branch_id!left (name),
+                  users:doctor_id!left (full_name),
+                  appointment_slots:slot_id!left (start_time)
                 `)
                 .eq('status', 'pending')
                 .order('created_at', { ascending: false });
@@ -104,7 +105,7 @@ export function OnlineBookings() {
     const generatePatientNumber = () => {
         const timestamp = Date.now().toString().slice(-6);
         const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-        return `P${timestamp}${random}`;
+        return `${timestamp}${random}`;
     };
 
     const handleApprove = async (booking: OnlineBooking) => {
@@ -143,7 +144,24 @@ export function OnlineBookings() {
                 patientId = newPatient.id;
             }
 
-            // 2. Create appointment — use safeBranchId for consistency
+            // 2. Check patient double booking on same date
+            const slotStartTime = booking.appointment_slots.start_time;
+            const targetDateStr = slotStartTime.split('T')[0] || slotStartTime.split(' ')[0];
+            const startOfDay = `${targetDateStr}T00:00:00`;
+            const endOfDay = `${targetDateStr}T23:59:59`;
+
+            const { data: existingAppts } = await supabase
+                .from('appointments')
+                .select('id')
+                .eq('patient_id', patientId)
+                .gte('appointment_date', startOfDay)
+                .lte('appointment_date', endOfDay)
+                .neq('status', 'cancelled');
+
+            if (existingAppts && existingAppts.length > 0) {
+                throw new Error(`Patient already has an active appointment booked on ${targetDateStr}. Duplicate bookings on the same date are not allowed.`);
+            }
+
             const appointmentBranchId = booking.branch_id || profile?.branch_id;
             const { data: appointment, error: aError } = await supabase
                 .from('appointments')
@@ -333,6 +351,13 @@ export function OnlineBookings() {
                                                 <User className="w-3 h-3 text-green-600" />
                                                 Dr. {booking.users?.full_name}
                                             </div>
+                                            {booking.appointment_type && (
+                                                <div className="mt-1">
+                                                    <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase rounded-full border ${getAppointmentTypeBadge(booking.appointment_type)}`}>
+                                                        {getAppointmentTypeLabel(booking.appointment_type)}
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">

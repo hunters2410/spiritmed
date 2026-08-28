@@ -2,13 +2,12 @@ import React, { useRef } from 'react';
 import { Printer, Edit3, Plus, ArrowLeft, Download, Send } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 const renderHtmlOrText = (text?: string) => {
     if (!text) return 'N/A';
-    if (/<[a-z][\s\S]*>/i.test(text)) {
-        return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
-    }
-    return <div className="whitespace-pre-wrap">{text}</div>;
+    // Always render as HTML — rich text editor stores HTML. Safe since content is doctor-authored.
+    return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
 };
 
 interface Branch {
@@ -60,25 +59,28 @@ interface Props {
     onEdit: () => void;
     onAddNew: () => void;
     onSendEmail: () => void;
+    autoPrint?: boolean;
+    autoDownload?: boolean;
 }
 
-export function ConsultationPrintView({ consultation, branch, onBack, onEdit, onAddNew, onSendEmail }: Props) {
+export function ConsultationPrintView({ consultation, branch, onBack, onEdit, onAddNew, onSendEmail, autoPrint, autoDownload }: Props) {
     const printRef = useRef<HTMLDivElement>(null);
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { 
-            scale: 2,
-            useCORS: true,
-            allowTaint: true
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`CONSULTATION_${consultation.patient.full_name}.pdf`);
+        await exportElementToPdf(printRef.current, `CONSULTATION_${consultation.patient.full_name}.pdf`);
     };
+
+    React.useEffect(() => {
+        if (autoPrint) {
+            const timer = setTimeout(() => window.print(), 400);
+            return () => clearTimeout(timer);
+        }
+        if (autoDownload) {
+            const timer = setTimeout(() => handleDownloadPdf(), 400);
+            return () => clearTimeout(timer);
+        }
+    }, [autoPrint, autoDownload]);
 
     return (
         <div className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col md:flex-row gap-6 items-start justify-center">
@@ -87,6 +89,10 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                 .rich-text-content ol { list-style-type: decimal !important; margin-left: 1.5rem !important; padding-left: 0.5rem !important; display: block !important; }
                 .rich-text-content li { margin-bottom: 0.25rem !important; display: list-item !important; }
                 .rich-text-content p { margin-bottom: 0.5rem !important; }
+                @media print {
+                    @page { size: A4 portrait; margin: 10mm; }
+                    body { background: #ffffff !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                }
             `}</style>
             {/* Action Sidebar */}
             <div className="w-full md:w-64 space-y-2 print:hidden order-2 md:order-1">
@@ -111,8 +117,8 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
             </div>
 
             {/* Document View */}
-            <div className="flex-1 max-w-[210mm] order-1 md:order-2">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
+            <div className="flex-1 w-full overflow-x-auto order-1 md:order-2 flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
                     {/* Header */}
                     <div className="flex justify-between items-start border-b pb-6 mb-6">
                         <div>
@@ -141,14 +147,14 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                     <div className="grid grid-cols-2 gap-8 mb-8 text-[11px]">
                         <div>
                             <p className="font-bold uppercase text-[9px] text-gray-400 mb-1">Patient Details:</p>
-                            <p className="text-sm font-bold uppercase">{consultation.patient.full_name}</p>
-                            <p>ID: {consultation.patient.patient_number}</p>
-                            <p>Gender: {consultation.patient.gender}</p>
-                            <p>DOB: {new Date(consultation.patient.date_of_birth).toLocaleDateString()}</p>
+                            <p className="text-sm font-bold uppercase">{consultation.patient?.full_name || 'N/A'}</p>
+                            <p>ID: {consultation.patient?.patient_number || 'N/A'}</p>
+                            <p>Gender: {consultation.patient?.gender || 'N/A'}</p>
+                            <p>DOB: {consultation.patient?.date_of_birth ? new Date(consultation.patient.date_of_birth).toLocaleDateString() : 'N/A'}</p>
                         </div>
                         <div className="text-right">
                             <p className="font-bold uppercase text-[9px] text-gray-400 mb-1">Visit Details:</p>
-                            <p><b>Consultation ID:</b> {consultation.id.slice(0, 8)}</p>
+                            <p><b>Consultation ID:</b> {consultation.id?.slice(0, 8) || 'N/A'}</p>
                             <p><b>Visit Date:</b> {new Date(consultation.created_at || consultation.consultation_date || new Date()).toLocaleDateString()}</p>
                             {consultation.referral_doctor?.full_name && (
                                 <p><b>Referred By:</b> {consultation.referral_doctor.full_name}</p>
@@ -222,8 +228,8 @@ export function ConsultationPrintView({ consultation, branch, onBack, onEdit, on
                                 <img src="https://cpyyclrhnyeibxlouwep.supabase.co/storage/v1/object/public/branding/signatures/697a3863-1de7-4615-819c-45b0d7066d67/12a67a17-cd7e-47b1-b1f3-3d678d826965_1783948399207.jpg" alt="Signature" className="h-16 w-auto mx-auto mb-2" />
                             </a>
                             <div className="text-[10px] space-y-0.5">
-                                <p className="font-bold uppercase">{consultation.doctor.full_name}</p>
-                                <p className="text-gray-500">{consultation.doctor.qualifications}</p>
+                                <p className="font-bold uppercase">{consultation.doctor?.full_name || 'Dr. S.C. Meki'}</p>
+                                <p className="text-gray-500">{consultation.doctor?.qualifications || 'Consultant Urologist'}</p>
                                 <p className="text-gray-400 uppercase tracking-widest pt-2">Authorized Physician</p>
                             </div>
                         </div>

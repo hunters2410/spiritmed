@@ -277,19 +277,16 @@ export function AppointmentSchedule() {
                         const slotEndTime = new Date(slotTime.getTime() + scheduleConfig.duration * 60000);
                         if (slotEndTime > dayEndTime) break;
 
-                        // Bug 11 fix: skip time slots that have already passed today
-                        if (slotTime > now) {
-                            slots.push({
-                                doctor_id: selectedDoctor,
-                                branch_id: profile?.branch_id,
-                                slot_date: dateStr,
-                                start_time: slotTime.toISOString(),
-                                end_time: slotEndTime.toISOString(),
-                                is_booked: false
-                            });
-                        }
+                        slots.push({
+                            doctor_id: selectedDoctor,
+                            branch_id: profile?.branch_id,
+                            slot_date: dateStr,
+                            start_time: slotTime.toISOString(),
+                            end_time: slotEndTime.toISOString(),
+                            is_booked: false
+                        });
 
-                        slotTime = new Date(slotEndTime.getTime()); // Bug 2: immutable increment
+                        slotTime = new Date(slotEndTime.getTime()); // immutable increment
                     }
                 }
 

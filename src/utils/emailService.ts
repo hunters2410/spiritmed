@@ -35,13 +35,16 @@ export const emailService = {
                 } else {
                     query = query
                         .eq('branch_id', options.branchId)
-                        .eq('trigger_type', options.triggerType)
-                        .eq('is_active', true);
+                        .eq('trigger_type', options.triggerType);
                 }
 
                 const { data: template } = await query.maybeSingle();
                 
                 if (template) {
+                    if (template.is_active === false) {
+                        console.log(`Email trigger "${options.triggerType}" is disabled for branch ${options.branchId}`);
+                        return { success: false, error: `Email trigger "${options.triggerType}" is disabled` };
+                    }
                     finalBody = template.body;
                     finalSubject = template.subject;
                 }
@@ -51,35 +54,89 @@ export const emailService = {
                 throw new Error('Email body and subject are required (could not resolve from template or options)');
             }
 
-            // 2. Replace placeholders in body and subject
-            if (options.placeholders) {
-                Object.entries(options.placeholders).forEach(([key, value]) => {
-                    // Support both {key} and {{key}}
-                    const regexDouble = new RegExp(`{{${key}}}`, 'g');
-                    const regexSingle = new RegExp(`{${key}}`, 'g');
-                    
-                    finalBody = finalBody.replace(regexDouble, value || '').replace(regexSingle, value || '');
-                    finalSubject = finalSubject.replace(regexDouble, value || '').replace(regexSingle, value || '');
-                });
+            // Fetch Branch Clinic Name dynamically from Settings
+            let clinicName = '';
+            if (options.branchId) {
+                const { data: branch } = await supabase
+                    .from('branches')
+                    .select('name')
+                    .eq('id', options.branchId)
+                    .maybeSingle();
+                if (branch?.name) {
+                    clinicName = branch.name;
+                }
             }
 
-            // 3. Log to Database
+            // Always resolve clinic_name placeholder if not explicitly provided
+            const allPlaceholders: Record<string, string> = {
+                clinic_name: clinicName || 'Clinic',
+                ...(options.placeholders || {})
+            };
+
+            // 2. Replace placeholders in body and subject
+            Object.entries(allPlaceholders).forEach(([key, value]) => {
+                // Support both {key} and {{key}}
+                const regexDouble = new RegExp(`{{${key}}}`, 'g');
+                const regexSingle = new RegExp(`{${key}}`, 'g');
+                
+                finalBody = finalBody.replace(regexDouble, value || '').replace(regexSingle, value || '');
+                finalSubject = finalSubject.replace(regexDouble, value || '').replace(regexSingle, value || '');
+            });
+
+            // Replace legacy hardcoded 'SpiritMed' or 'SpiritMed Medical System' or 'SpiritMed Team' with dynamic clinic name
+            if (clinicName) {
+                finalBody = finalBody
+                    .replace(/SpiritMed Medical System/gi, clinicName)
+                    .replace(/SpiritMed Medical/gi, clinicName)
+                    .replace(/SpiritMed Team/gi, `${clinicName} Team`)
+                    .replace(/SpiritMed/gi, clinicName);
+
+                finalSubject = finalSubject
+                    .replace(/SpiritMed Medical System/gi, clinicName)
+                    .replace(/SpiritMed Medical/gi, clinicName)
+                    .replace(/SpiritMed/gi, clinicName);
+            }
+
+            // Resolve branch_id if missing
+            let targetBranchId = options.branchId;
+            if (!targetBranchId) {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (user) {
+                        const { data: userProfile } = await supabase
+                            .from('users')
+                            .select('branch_id')
+                            .eq('id', user.id)
+                            .maybeSingle();
+                        if (userProfile?.branch_id) {
+                            targetBranchId = userProfile.branch_id;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Could not resolve user branch_id for email log:', e);
+                }
+            }
+
+            // 3. Log to Database with sanitized payload
             console.log('Logging email to database...');
-            const { data, error } = await supabase.from('email_logs').insert({
-                branch_id: options.branchId,
+            const logPayload: Record<string, any> = {
                 recipient_email: options.recipientEmail,
-                recipient_name: options.recipientName,
                 subject: finalSubject,
                 body: finalBody,
-                status: 'sent', // Set as 'sending' if using an async worker
-                sender_id: options.senderId,
-                reference_id: options.referenceId,
-                reference_type: options.referenceType,
-                file_url: options.fileUrl
-            }).select().single();
+                status: 'pending'
+            };
+
+            if (targetBranchId) logPayload.branch_id = targetBranchId;
+            if (options.recipientName) logPayload.recipient_name = options.recipientName;
+            if (options.senderId) logPayload.sender_id = options.senderId;
+            if (options.referenceId) logPayload.reference_id = options.referenceId;
+            if (options.referenceType) logPayload.reference_type = options.referenceType;
+            if (options.fileUrl) logPayload.file_url = options.fileUrl;
+
+            const { data, error } = await supabase.from('email_logs').insert(logPayload).select().single();
 
             if (error) {
-                console.error('Database log error:', error);
+                console.error('Database log error:', error.message || error, error.details || '', error.hint || '');
                 throw error;
             }
 

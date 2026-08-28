@@ -1,17 +1,16 @@
-import { useRef } from 'react';
-import { Printer, ArrowLeft, Download, Send, Edit3, Plus } from 'lucide-react';
+import { useRef, useEffect } from 'react';
+import { Printer, ArrowLeft, Download, Send, Edit3, Plus, MessageSquare } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 const renderHtmlOrText = (text?: string) => {
     if (!text) return 'N/A';
-    // Remove literal '\r\n', '\r', '\n' escape strings
+    // Always render as HTML — the rich text editor stores HTML tags.
+    // dangerouslySetInnerHTML is safe here: content is doctor-authored, not user-submitted.
     let cleaned = text.replace(/\\r\\n|\\r|\\n/g, '');
     if (cleaned.trim().toLowerCase() === 'nil') cleaned = 'NIL';
-    if (/<[a-z][\s\S]*>/i.test(cleaned)) {
-        return <div dangerouslySetInnerHTML={{ __html: cleaned }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
-    }
-    return <div className="whitespace-pre-wrap">{cleaned}</div>;
+    return <div dangerouslySetInnerHTML={{ __html: cleaned }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
 };
 
 const formatDate = (dateStr?: string) => {
@@ -71,29 +70,41 @@ interface Props {
     onEdit: () => void;
     onAddNew: () => void;
     onSendEmail: () => void;
+    onSendSms?: () => void;
+    autoPrint?: boolean;
+    autoDownload?: boolean;
 }
 
 export function ClinicalDocumentPrintView({
     type, data, branch,
     allAnaesthetists = [], allAssistants = [], allDiagnoses = [],
-    onBack, onEdit, onAddNew, onSendEmail
+    onBack, onEdit, onAddNew, onSendEmail, onSendSms,
+    autoPrint = false, autoDownload = false
 }: Props) {
     const printRef = useRef<HTMLDivElement>(null);
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { 
-            scale: 2,
-            useCORS: true,
-            allowTaint: true
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`${type.toUpperCase()}_${data.patient.full_name}.pdf`);
+        await exportElementToPdf(printRef.current, `${type.toUpperCase()}_${data.patient.full_name}.pdf`);
     };
+
+    useEffect(() => {
+        if (autoPrint) {
+            const timer = setTimeout(() => {
+                window.print();
+            }, 400);
+            return () => clearTimeout(timer);
+        }
+    }, [autoPrint]);
+
+    useEffect(() => {
+        if (autoDownload) {
+            const timer = setTimeout(() => {
+                handleDownloadPdf();
+            }, 400);
+            return () => clearTimeout(timer);
+        }
+    }, [autoDownload]);
 
     const getTitle = () => {
         switch (type) {
@@ -308,19 +319,27 @@ export function ClinicalDocumentPrintView({
                 .rich-text-content p { margin-bottom: 0.5rem !important; }
                 
                 @media print {
+                    @page {
+                        size: A4 portrait;
+                        margin: 10mm;
+                    }
+                    body {
+                        background: #ffffff !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
                     .print-no-padding {
                         padding: 0 !important;
                         border: none !important;
                         box-shadow: none !important;
                         background: transparent !important;
+                        width: 100% !important;
+                        min-width: 0 !important;
+                        max-width: 100% !important;
                     }
                     .print-referral-box {
                         border: 1.5px solid black !important;
-                        padding: 28px !important;
-                        min-height: 268mm !important;
-                        display: flex !important;
-                        flex-direction: column !important;
-                        justify-content: space-between !important;
+                        padding: 20px !important;
                         box-sizing: border-box !important;
                     }
                 }
@@ -339,17 +358,22 @@ export function ClinicalDocumentPrintView({
                 <button onClick={onEdit} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
                     <Edit3 className="w-4 h-4" /> Edit
                 </button>
-                <button onClick={onSendEmail} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
-                    <Send className="w-4 h-4" /> Email
+                <button onClick={onSendEmail} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm hover:bg-gray-50">
+                    <Send className="w-4 h-4 text-blue-600" /> Email
                 </button>
+                {onSendSms && (
+                    <button onClick={onSendSms} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm hover:bg-gray-50">
+                        <MessageSquare className="w-4 h-4 text-purple-600" /> SMS
+                    </button>
+                )}
                 <button onClick={onAddNew} className="w-full flex items-center justify-center gap-2 bg-white text-gray-700 border px-4 py-2 rounded shadow-sm text-sm">
                     <Plus className="w-4 h-4" /> Add New
                 </button>
             </div>
 
             {/* Document View */}
-            <div className="flex-1 max-w-[210mm] order-1 md:order-2">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none print-no-padding">
+            <div className="flex-1 w-full overflow-x-auto order-1 md:order-2 flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none print-no-padding w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
                     {isReferral ? (
                         /* Referral Form Specific Layout */
                         <div className="print-referral-box border border-black p-8 flex flex-col justify-between min-h-[258mm] text-xs text-gray-800 leading-relaxed">

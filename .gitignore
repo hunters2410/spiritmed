@@ -7,6 +7,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+**/node_modules/
 dist
 dist-ssr
 *.local
@@ -21,3 +22,23 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Mobile build & cache
+.expo/
+**/web-build/
+expo-env.d.ts
+.kotlin/
+
+# Build archives
+dist.zip
+dist_folder.zip
+spiritmed_build.zip
+spiritmed_dist.zip
+spiritmed_hostinger.zip
+spiritmed_hostinger_upload.zip
+spiritmed_production_v1.zip
+build_log.txt

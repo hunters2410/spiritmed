@@ -41,9 +41,8 @@ export function Emails() {
     const [showComposeModal, setShowComposeModal] = useState(false);
     const [showTemplateModal, setShowTemplateModal] = useState(false);
     
-    // Pagination
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState<number>(25);
 
     const [composeForm, setComposeForm] = useState({
         recipient_email: '',
@@ -326,28 +325,49 @@ export function Emails() {
                             </tbody>
                         </table>
 
-                        {/* Pagination */}
-                        {totalPages > 1 && (
-                            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                                <span className="text-xs text-gray-500">
-                                    Showing {(currentPage-1)*itemsPerPage + 1} to {Math.min(currentPage*itemsPerPage, filteredLogs.length)} of {filteredLogs.length} entries
-                                </span>
-                                <div className="flex gap-2">
-                                    <button 
-                                        disabled={currentPage === 1}
-                                        onClick={() => setCurrentPage(p => p - 1)}
-                                        className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 hover:bg-gray-50"
-                                    >
-                                        <ChevronLeft className="w-4 h-4" />
-                                    </button>
-                                    <button 
-                                        disabled={currentPage === totalPages}
-                                        onClick={() => setCurrentPage(p => p + 1)}
-                                        className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 hover:bg-gray-50"
-                                    >
-                                        <ChevronRight className="w-4 h-4" />
-                                    </button>
+                        {filteredLogs.length > 0 && (
+                            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4">
+                                <div className="flex items-center space-x-4">
+                                    <span className="text-xs text-gray-500">
+                                        Showing {(currentPage-1)*itemsPerPage + 1} to {Math.min(currentPage*itemsPerPage, filteredLogs.length)} of {filteredLogs.length} entries
+                                    </span>
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                                        <select
+                                            value={itemsPerPage === filteredLogs.length ? 'all' : itemsPerPage}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                setItemsPerPage(val === 'all' ? filteredLogs.length || 1 : Number(val));
+                                                setCurrentPage(1);
+                                            }}
+                                            className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none text-gray-700 dark:text-gray-200"
+                                        >
+                                            <option value={10}>10</option>
+                                            <option value={25}>25</option>
+                                            <option value={50}>50</option>
+                                            <option value={100}>100</option>
+                                            <option value="all">ALL</option>
+                                        </select>
+                                    </div>
                                 </div>
+                                {totalPages > 1 && (
+                                    <div className="flex gap-2">
+                                        <button 
+                                            disabled={currentPage === 1}
+                                            onClick={() => setCurrentPage(p => p - 1)}
+                                            className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 hover:bg-gray-50"
+                                        >
+                                            <ChevronLeft className="w-4 h-4" />
+                                        </button>
+                                        <button 
+                                            disabled={currentPage === totalPages}
+                                            onClick={() => setCurrentPage(p => p + 1)}
+                                            className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50 hover:bg-gray-50"
+                                        >
+                                            <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

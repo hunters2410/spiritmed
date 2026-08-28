@@ -55,7 +55,13 @@ export function SearchDropdown({
 
     const filtered = items.filter((i: any) => {
         const text = getLabel(i);
-        return text.toLowerCase().includes(search.toLowerCase());
+        const searchLower = search.toLowerCase();
+        if (text.toLowerCase().includes(searchLower)) return true;
+        if (i?.patient_number && String(i.patient_number).toLowerCase().includes(searchLower)) return true;
+        if (i?.file_number && String(i.file_number).toLowerCase().includes(searchLower)) return true;
+        if (i?.phone && String(i.phone).includes(search)) return true;
+        if (i?.national_id && String(i.national_id).toLowerCase().includes(searchLower)) return true;
+        return false;
     });
 
     const isExactMatch = items.some(i => getLabel(i).toLowerCase() === search.toLowerCase());
@@ -102,12 +108,22 @@ export function SearchDropdown({
 
             {isOpen && (
                 <div className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                    <div className="p-2 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+                    <div className="p-2 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 space-y-1">
                         <div className="relative">
                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 w-3.5 h-3.5" />
                             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                                placeholder="Search..." className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md outline-none focus:ring-1 focus:ring-green-500" autoFocus />
+                                placeholder="Search by name, ID, file, phone..." className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md outline-none focus:ring-1 focus:ring-green-500" autoFocus />
                         </div>
+                        {items.length > 0 && (
+                            <div className="flex items-center justify-between text-[10px] text-gray-400 px-1 pt-0.5">
+                                <span>{filtered.length.toLocaleString()} {filtered.length === 1 ? 'result' : 'results'} {search ? `found of ${items.length.toLocaleString()}` : 'available'}</span>
+                                {search && (
+                                    <button type="button" onClick={() => setSearch('')} className="text-gray-400 hover:text-gray-600 underline">
+                                        Clear
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {onAddNew && (

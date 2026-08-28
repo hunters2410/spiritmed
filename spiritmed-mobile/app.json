@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "SpiritMed",
+    "slug": "spiritmed",
+    "version": "1.8.3",
+    "orientation": "portrait",
+    "icon": "./assets/favicon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/favicon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.spiritmed.app"
+    },
+    "android": {
+      "package": "com.spiritmed.app",
+      "versionCode": 12,
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/favicon.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sharing",
+      "expo-audio"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "a7a9f57e-e7f8-410b-b724-d2fd88998220"
+      }
+    }
+  }
+}

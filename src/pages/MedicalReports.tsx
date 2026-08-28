@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, FileText, Pencil, Trash2, X, Eye, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { fetchAllPatients } from '../utils/patientUtils';
+import { Plus, FileText, Pencil, Trash2, X, Eye, ChevronLeft, ChevronRight, Search, Printer, Download } from 'lucide-react';
 import { MedicalReportPrintView } from '../components/MedicalReportPrintView';
 import { SearchDropdown } from '../components/SearchDropdown';
+import { RichTextEditor } from '../components/RichTextEditor';
 
 /* ─── types ─── */
 interface Patient {
@@ -48,14 +50,25 @@ export default function MedicalReports() {
     const [reports, setReports] = useState<MedicalReport[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const hasLoadedOnce = useRef(false);
+    const [totalDbCount, setTotalDbCount] = useState(0);
     const [showModal, setShowModal] = useState(false);
     const [showPatientModal, setShowPatientModal] = useState(false);
     const [showDiagnosisModal, setShowDiagnosisModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
     const [selectedReport, setSelectedReport] = useState<MedicalReport | null>(null);
+    const [actionTrigger, setActionTrigger] = useState<'none' | 'print' | 'download'>('none');
     const [branch, setBranch] = useState<any>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(25);
+
+    const handleSearchChange = useCallback((value: string) => {
+        setSearchQuery(value);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = setTimeout(() => { setDebouncedSearch(value); setCurrentPage(1); }, 300);
+    }, []);
 
     /* Form State */
     const [form, setForm] = useState({
@@ -77,45 +90,68 @@ export default function MedicalReports() {
 
     useEffect(() => {
         if (profile) {
-            loadAll();
+            loadReferences();
             fetchBranchDetails();
         } else {
             setLoading(false);
         }
     }, [profile?.id]);
 
+    // Re-fetch records when page or search changes
+    useEffect(() => {
+        if (profile) loadReports();
+    }, [currentPage, debouncedSearch, itemsPerPage, profile?.id]);
+
     async function fetchBranchDetails() {
         if (!profile?.branch_id) return;
-        const { data } = await supabase.from('branches').select('*').eq('id', profile.branch_id).maybeSingle();
+        const { data } = await supabase.from('branches').select('name, logo_url, phone, email, address').eq('id', profile.branch_id).maybeSingle();
         setBranch(data);
     }
 
-    async function loadAll() {
-        setLoading(true);
+    async function loadReferences() {
         try {
             const bid = profile?.branch_id;
-
-            const repQ = supabase.from('medical_reports').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), diagnosis:diagnoses(name, icd10_code)').order('report_date', { ascending: false }).order('created_at', { ascending: false });
-            const patQ = supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth');
             const diaQ = supabase.from('diagnoses').select('id, name, icd10_code');
+            if (bid) diaQ.eq('branch_id', bid);
 
-            if (bid) {
-                repQ.eq('branch_id', bid);
-                patQ.eq('branch_id', bid);
-                diaQ.eq('branch_id', bid);
-            }
-
-            const [repRes, patRes, diaRes] = await Promise.all([repQ, patQ, diaQ]);
-
-            setReports(repRes.data || []);
-            setPatients(patRes.data || []);
+            const [allPats, diaRes] = await Promise.all([
+                fetchAllPatients({ branchId: bid, select: 'id, full_name, patient_number, gender, date_of_birth' }),
+                diaQ
+            ]);
+            setPatients(allPats || []);
             setDiagnoses(diaRes.data || []);
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function loadReports() {
+        if (!hasLoadedOnce.current) setLoading(true);
+        try {
+            const bid = profile?.branch_id;
+            const from = (currentPage - 1) * itemsPerPage;
+            const to = from + itemsPerPage - 1;
+
+            let q = supabase.from('medical_reports')
+                .select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), diagnosis:diagnoses(name, icd10_code)', { count: 'exact' })
+                .order('report_date', { ascending: false }).order('created_at', { ascending: false })
+                .range(from, to);
+            if (bid) q = q.eq('branch_id', bid);
+
+            const { data, error, count } = await q;
+            if (error) throw error;
+            setReports(data || []);
+            setTotalDbCount(count || 0);
+            hasLoadedOnce.current = true;
         } catch (e) {
             console.error(e);
         } finally {
             setLoading(false);
         }
     }
+
+    // Alias for mutation callbacks that need to reload
+    const loadAll = () => { loadReports(); loadReferences(); };
 
     const resetForm = () => {
         setForm({
@@ -177,8 +213,8 @@ export default function MedicalReports() {
 
     async function handleCreatePatient(e: React.FormEvent) {
         e.preventDefault();
-        const pNum = `P-${Date.now().toString().slice(-6)}`;
-        const generatedEmail = newPatientForm.email || `patient.${pNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+        const pNum = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+        const generatedEmail = newPatientForm.email || `patient.${pNum}@spiritmed.com`;
         const generatedPassword = 'patient123456';
         const { data, error } = await supabase.from('patients').insert([{
             ...newPatientForm,
@@ -219,14 +255,17 @@ export default function MedicalReports() {
             <MedicalReportPrintView
                 report={selectedReport}
                 branch={branch}
-                onBack={() => setViewMode('table')}
+                autoPrint={actionTrigger === 'print'}
+                autoDownload={actionTrigger === 'download'}
+                onBack={() => { setViewMode('table'); setActionTrigger('none'); }}
                 onEdit={() => {
                     const { patient, doctor, diagnosis, created_at, updated_at, id, ...formData } = selectedReport;
                     setForm(formData as any);
                     setShowModal(true);
                     setViewMode('table');
+                    setActionTrigger('none');
                 }}
-                onAddNew={() => { resetForm(); setShowModal(true); setViewMode('table'); }}
+                onAddNew={() => { resetForm(); setShowModal(true); setViewMode('table'); setActionTrigger('none'); }}
                 onSendEmail={() => alert('Email functionality coming soon')}
             />
         );
@@ -302,14 +341,16 @@ export default function MedicalReports() {
                         <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
                             <span className="text-xs text-gray-500 font-medium">{r.diagnosis?.name || (r.diagnosis as any)?.label || 'Diagnosis N/A'}</span>
                             <div className="flex items-center space-x-1">
-                                <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); setActionTrigger('none'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); setActionTrigger('print'); }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition" title="Print Report"><Printer className="w-4 h-4" /></button>
+                                <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); setActionTrigger('download'); }} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded transition" title="Download PDF"><Download className="w-4 h-4" /></button>
                                 <button onClick={() => {
                                     setSelectedReport(r);
                                     const { patient, doctor, diagnosis, created_at, updated_at, id, ...formData } = r as any;
                                     setForm(formData as any);
                                     setShowModal(true);
-                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded transition" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
                             </div>
                         </div>
                     </div>
@@ -354,15 +395,17 @@ export default function MedicalReports() {
                                     </td>
                                     <td className="px-6 py-4 text-sm text-gray-500">Dr. {r.doctor?.full_name}</td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                        <div className="flex justify-end gap-1.5">
+                                            <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); setActionTrigger('none'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                            <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); setActionTrigger('print'); }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition" title="Print Report"><Printer className="w-4 h-4" /></button>
+                                            <button onClick={() => { setSelectedReport(r); setViewMode('detailed'); setActionTrigger('download'); }} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded transition" title="Download PDF"><Download className="w-4 h-4" /></button>
                                             <button onClick={() => {
                                                 setSelectedReport(r);
                                                 const { patient, doctor, diagnosis, created_at, updated_at, id, ...formData } = r;
                                                 setForm(formData as any);
                                                 setShowModal(true);
-                                            }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                            <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                            }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded transition" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                            <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
                                         </div>
                                     </td>
                                 </tr>
@@ -430,14 +473,14 @@ export default function MedicalReports() {
             {/* Add/Edit Modal */}
             {showModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden border border-gray-100 dark:border-gray-700 animate-in zoom-in-95 duration-200">
-                        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden border border-gray-100 dark:border-gray-700 animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50 flex-shrink-0">
                             <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
                                 <FileText className="w-5 h-5 text-indigo-600" /> {selectedReport ? 'Edit' : 'Add'} Medical Report
                             </h2>
                             <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-6 h-6" /></button>
                         </div>
-                        <form onSubmit={handleSave} className="p-6">
+                        <form onSubmit={handleSave} className="p-6 overflow-y-auto flex-1">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                                 <div>
                                     <label className={labelCls}>Report Date</label>
@@ -471,18 +514,15 @@ export default function MedicalReports() {
 
                             <div className="mb-6">
                                 <label className={labelCls}>Medical Report Content</label>
-                                <textarea
-                                    required
-                                    rows={12}
-                                    placeholder="Type the clinical findings and medical report here..."
+                                <RichTextEditor
                                     value={form.content}
-                                    onChange={e => setForm({ ...form, content: e.target.value })}
-                                    className={`${inputCls} font-mono text-xs resize-none`}
+                                    onChange={val => setForm({ ...form, content: val })}
+                                    placeholder="Type the clinical findings and medical report here..."
+                                    minHeight="220px"
                                 />
-                                <p className="text-[10px] text-gray-400 mt-2 italic">Tip: Use the detailed view (Eye icon) after saving to format for printing.</p>
                             </div>
 
-                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700">
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700 flex-shrink-0">
                                 <button type="button" onClick={() => setShowModal(false)} className="px-6 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm font-semibold text-gray-500 hover:bg-gray-50 transition">Cancel</button>
                                 <button type="submit" className="px-8 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition shadow-lg shadow-indigo-200 dark:shadow-none">Save & Finalize</button>
                             </div>

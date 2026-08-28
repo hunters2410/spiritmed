@@ -1,9 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2, HeartPulse, Stethoscope, Skull, LogOut, ChevronLeft, ChevronRight, FileSpreadsheet, FileJson, Users, Clock, User, AlertCircle, CreditCard, Upload, Share2, Video, Link } from 'lucide-react';
+import { autoAllocateCredits } from '../utils/creditAllocation';
+
+// ── Module-level patient cache (5-minute TTL, survives navigation) ─────────────
+const _pCache: { patients: any[] | null; ts: number; branchId: string | null; count: number } = {
+  patients: null, ts: 0, branchId: null, count: 0,
+};
+const P_CACHE_TTL = 5 * 60 * 1000;
+function isPCacheValid(branchId: string | null) {
+  return _pCache.patients !== null
+    && _pCache.branchId === branchId
+    && Date.now() - _pCache.ts < P_CACHE_TTL;
+}
+export function invalidatePatientsCache() { _pCache.patients = null; _pCache.ts = 0; }
+// ─────────────────────────────────────────────────────────────────────────────
+import { Plus, Search, Edit2, Eye, FileText, Phone, Mail, Calendar, Download, Filter, X, Trash2, HeartPulse, Stethoscope, Skull, LogOut, ChevronLeft, ChevronRight, FileSpreadsheet, FileJson, Users, Clock, User, AlertCircle, CreditCard, Upload, Share2, Video, Link, UserX, DollarSign, Receipt, ArrowRight, TrendingDown, TrendingUp, History } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
+import { formatFileNumber, formatPatientNumber } from '../utils/patientUtils';
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
 import { PatientPrintView } from '../components/PatientPrintView';
 import { SearchDropdown } from '../components/SearchDropdown';
 import { SearchableSelect } from '../components/SearchableSelect';
@@ -25,6 +43,7 @@ interface Patient {
   email: string;
   status: string;
   total_due?: number;
+  credit_balance?: number;
   total_shortfall_due?: number;
   total_medical_aid_due?: number;
   medical_aid_id?: string;
@@ -62,8 +81,13 @@ export function Patients() {
   const [fileNumberPool, setFileNumberPool] = useState<any[]>([]);
   const [referralDoctors, setReferralDoctors] = useState<ReferralDoctor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
+  const [billsLoading, setBillsLoading] = useState(false);
   const [totalPatientCount, setTotalPatientCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasLoadedOnce = useRef(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [showModal, setShowModal] = useState(false);
@@ -75,6 +99,7 @@ export function Patients() {
   });
   const [showDeceasedModal, setShowDeceasedModal] = useState(false);
   const [showDischargedModal, setShowDischargedModal] = useState(false);
+  const [showOldPatientModal, setShowOldPatientModal] = useState(false);
   const [selectedPatientForStatus, setSelectedPatientForStatus] = useState<Patient | null>(null);
   const [diagnoses, setDiagnoses] = useState<any[]>([]);
   const [statusFormData, setStatusFormData] = useState({
@@ -100,9 +125,15 @@ export function Patients() {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [selectedPatientForHistory, setSelectedPatientForHistory] = useState<any>(null);
   const [paymentHistory, setPaymentHistory] = useState<any[]>([]);
+  const [patientBills, setPatientBills] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
+  const [billSummary, setBillSummary] = useState<{ totalBilled: number; totalPaid: number; balance: number; medicalAidBilled: number; medicalAidBalance: number }>({ totalBilled: 0, totalPaid: 0, balance: 0, medicalAidBilled: 0, medicalAidBalance: 0 });
   const [showFileDropdown, setShowFileDropdown] = useState(false);
+
+  // Bulk Delete State
+  const [selectedPatientIds, setSelectedPatientIds] = useState<string[]>([]);
+  const [bulkDeleting, setBulkDeleting]             = useState(false);
 
   // Patient Import State
   const [showImportModal, setShowImportModal] = useState(false);
@@ -144,6 +175,72 @@ export function Patients() {
     notes: '',
     date: new Date().toISOString().split('T')[0]
   });
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [fileNumberError, setFileNumberError] = useState<string | null>(null);
+
+  const validateEmail = async (emailVal: string) => {
+    if (!emailVal || !emailVal.trim()) {
+      setEmailError(null);
+      return true;
+    }
+    try {
+      const trimmed = emailVal.trim();
+      let query = supabase
+        .from('patients')
+        .select('id, full_name, patient_number')
+        .ilike('email', trimmed);
+
+      if (editingPatient?.id) {
+        query = query.neq('id', editingPatient.id);
+      }
+
+      const { data } = await query;
+      if (data && data.length > 0) {
+        const p = data[0];
+        setEmailError(`Email "${trimmed}" is already registered to ${p.full_name} (${p.patient_number})`);
+        return false;
+      } else {
+        setEmailError(null);
+        return true;
+      }
+    } catch (err) {
+      console.error('Error checking email uniqueness:', err);
+      return true;
+    }
+  };
+
+  const validateFileNumber = async (fileVal: string) => {
+    if (!fileVal || !fileVal.trim()) {
+      setFileNumberError(null);
+      return true;
+    }
+    try {
+      const trimmed = fileVal.trim();
+      let query = supabase
+        .from('patients')
+        .select('id, full_name, patient_number, status, file_number')
+        .eq('file_number', trimmed);
+
+      if (editingPatient?.id) {
+        query = query.neq('id', editingPatient.id);
+      }
+
+      const { data } = await query;
+      if (data && data.length > 0) {
+        const activeOccupant = data.find(p => p.status === 'active' || (p.status !== 'old_patient' && p.status !== 'inactive'));
+        if (activeOccupant) {
+          setFileNumberError(`File Number "${trimmed}" is already occupied by active patient ${activeOccupant.full_name} (${activeOccupant.patient_number})`);
+          return false;
+        }
+      }
+      setFileNumberError(null);
+      return true;
+    } catch (err) {
+      console.error('Error checking file number occupancy:', err);
+      return true;
+    }
+  };
+
   const [formData, setFormData] = useState({
     title: '',
     full_name: '',
@@ -179,12 +276,12 @@ export function Patients() {
     medical_aid_main_member: '',
     referral_doctor_id: '',
     file_number: '',
+    status: 'active',
     send_sms: false
   });
 
   useEffect(() => {
     if (profile) {
-      loadPatients();
       loadDoctors();
       loadMedicalAids();
       loadReferralDoctors();
@@ -193,6 +290,11 @@ export function Patients() {
     }
     loadBranch();
   }, [profile]);
+
+  // Re-fetch whenever page, debounced search, or filters change
+  useEffect(() => {
+    if (profile) fetchPage(currentPage, debouncedSearch);
+  }, [currentPage, debouncedSearch, filters, profile]);
 
   const loadDiagnoses = async () => {
     if (!profile?.branch_id && profile?.role !== 'super_admin') return;
@@ -234,38 +336,73 @@ export function Patients() {
     setShowViewSheet(true);
   };
 
+
+  // Navigate to bills page, passing state via sessionStorage
+  const navigateToBills = (state: Record<string, any>) => {
+    sessionStorage.setItem('billsNavState', JSON.stringify(state));
+    window.history.pushState({}, '', '/bills');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
   const loadPatientHistory = async (patientId: string) => {
     try {
       setHistoryLoading(true);
       setHistorySearch('');
-      const { data: bills } = await supabase
+      setBillSummary({ totalBilled: 0, totalPaid: 0, balance: 0, medicalAidBilled: 0, medicalAidBalance: 0 });
+
+      const fetchBills = () => supabase
         .from('bills')
-        .select('id, bill_number, bill_date')
-        .eq('patient_id', patientId);
-      
-      const bIds = (bills || []).map(b => b.id);
-      if (bIds.length === 0) { 
-        setPaymentHistory([]); 
-        return; 
+        .select('id, bill_number, bill_date, due_date, total_amount, paid_amount, discount_amount, balance, medical_aid_amount, medical_aid_balance, shortfall_amount, shortfall_balance, payment_method, status')
+        .eq('patient_id', patientId)
+        .order('bill_date', { ascending: true });
+
+      let { data: bills } = await fetchBills();
+
+      // Auto-fix existing overpayments: allocate credit before displaying the statement
+      if (bills && bills.length > 0) {
+        const totalPaidCheck = bills.reduce((s, b) => s + (b.paid_amount || 0), 0);
+        const totalOwedCheck = bills.reduce((s, b) => s + Math.max(0, (b.total_amount || 0) - (b.discount_amount || 0)), 0);
+        const hasUnpaid = bills.some(b => b.status !== 'paid');
+        if (totalPaidCheck > totalOwedCheck && hasUnpaid) {
+          await autoAllocateCredits(patientId, profile?.branch_id ?? null);
+          const { data: refreshed } = await fetchBills();
+          bills = refreshed;
+        }
       }
-      
+
+      setPatientBills(bills || []);
+      const bIds = (bills || []).map(b => b.id);
+
+      // Compute bill summary totals
+      // Outstanding = Total Billed − Total Paid (simple ledger truth; avoids stale DB balance columns)
+      const totalBilled = (bills || []).reduce((s, b) => s + (b.total_amount || 0), 0);
+      const totalPaid   = (bills || []).reduce((s, b) => s + (b.paid_amount || 0), 0);
+      const balance     = Math.max(0, totalBilled - totalPaid);
+      const medicalAidBilled  = (bills || []).reduce((s, b) => s + (b.medical_aid_amount || 0), 0);
+      const medicalAidBalance = (bills || []).reduce((s, b) => s + (b.medical_aid_balance || 0), 0);
+      setBillSummary({ totalBilled, totalPaid, balance, medicalAidBilled, medicalAidBalance });
+
+      if (bIds.length === 0) {
+        setPaymentHistory([]);
+        return;
+      }
+
       const { data: pmts, error } = await supabase
         .from('payments')
-        .select('id, amount, payment_method, payment_date, created_at, target_portion, notes, bill_id')
+        .select('id, amount, payment_method, payment_date, created_at, target_portion, notes, bill_id, discount_amount')
         .in('bill_id', bIds)
-        .order('payment_date', { ascending: false });
+        .order('payment_date', { ascending: true });
 
       if (error) throw error;
-      
+
       setPaymentHistory((pmts || []).map(p => {
         const b = (bills || []).find(x => x.id === p.bill_id);
         return { ...p, bill_number: b?.bill_number, bill_date: b?.bill_date };
       }));
-    } catch (err) { 
-      console.error('Error loading patient history:', err); 
+    } catch (err) {
+      console.error('Error loading patient history:', err);
       showToast('Failed to load payment history', 'error');
-    } finally { 
-      setHistoryLoading(false); 
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -278,30 +415,158 @@ export function Patients() {
 
   const handleExportHistory = (format: 'pdf' | 'excel', filteredItems: any[]) => {
     if (!selectedPatientForHistory) return;
-    const title = `Payment History - ${selectedPatientForHistory.full_name}`;
-    const fname = `${selectedPatientForHistory.full_name.replace(/\s+/g, '_')}_History`;
+    const patient = selectedPatientForHistory;
+    const fname = `${patient.full_name.replace(/\s+/g, '_')}_Statement`;
+
     if (format === 'excel') {
-      const data = filteredItems.map(p => ({
-        'INV #': p.bill_number,
-        'Date': new Date(p.payment_date).toLocaleDateString(),
-        'Method': p.payment_method?.replace(/_/g, ' '),
-        'Portion': p.target_portion === 'medical_aid' ? 'Medical Aid' : 'Patient',
-        'Amount': p.amount.toFixed(2),
-        'Notes': p.notes || ''
-      }));
-      exportToExcel(data, fname);
+      // Build combined transaction rows for Excel
+      const allEvents = [
+        ...patientBills.map(b => ({ _type: 'bill', _date: new Date(b.bill_date), ...b })),
+        ...filteredItems.map(p => ({ _type: 'payment', _date: new Date(p.payment_date), ...p }))
+      ].sort((a, b) => a._date.getTime() - b._date.getTime());
+      let running = 0;
+      const rows = allEvents.map(e => {
+        let debit = '', credit = '';
+        if (e._type === 'bill') { running += (e.total_amount || 0); debit = `$${(e.total_amount || 0).toFixed(2)}`; }
+        else { running -= (e.amount || 0); credit = `$${(e.amount || 0).toFixed(2)}`; }
+        const bal = running < 0 ? `-$${Math.abs(running).toFixed(2)} CR` : `$${running.toFixed(2)}`;
+        return {
+          'Date': e._type === 'bill' ? new Date(e.bill_date).toLocaleDateString() : new Date(e.payment_date).toLocaleDateString(),
+          'Reference': e.bill_number || '',
+          'Type': e._type === 'bill' ? 'Invoice' : 'Payment',
+          'Details': e._type === 'payment' ? (e.payment_method || 'cash').replace(/_/g, ' ') : (e.status || 'unpaid').replace(/_/g, ' '),
+          'Debit (+)': debit,
+          'Credit (-)': credit,
+          'Balance': bal,
+        };
+      });
+      // Summary row appended at top
+      const summaryRows = [
+        { 'Date': 'SUMMARY', 'Reference': '', 'Type': 'Total Billed', 'Details': '', 'Debit (+)': `$${billSummary.totalBilled.toFixed(2)}`, 'Credit (-)': '', 'Balance': '' },
+        { 'Date': '', 'Reference': '', 'Type': 'Total Paid', 'Details': '', 'Debit (+)': '', 'Credit (-)': `$${billSummary.totalPaid.toFixed(2)}`, 'Balance': '' },
+        { 'Date': '', 'Reference': '', 'Type': billSummary.balance < 0 ? 'Credit Balance' : 'Outstanding', 'Details': '', 'Debit (+)': '', 'Credit (-)': '', 'Balance': billSummary.balance < 0 ? `-$${Math.abs(billSummary.balance).toFixed(2)} CR` : `$${billSummary.balance.toFixed(2)}` },
+        { 'Date': '', 'Reference': '', 'Type': '', 'Details': '', 'Debit (+)': '', 'Credit (-)': '', 'Balance': '' },
+      ];
+      exportToExcel([...summaryRows, ...rows], fname);
     } else {
-      const headers = ['INV #', 'Date', 'Method', 'Portion', 'Amount'];
-      const data = filteredItems.map(p => [
-        p.bill_number,
-        new Date(p.payment_date).toLocaleDateString(),
-        p.payment_method?.replace(/_/g, ' '),
-        p.target_portion === 'medical_aid' ? 'Medical Aid' : 'Patient',
-        `$${p.amount.toFixed(2)}`
-      ]);
-      exportToPDF(headers, data, title, fname);
+      // Full statement PDF with summary cards + transaction table
+      const doc = new jsPDF();
+      const pageW = doc.internal.pageSize.getWidth();
+
+      // ── Header ──
+      doc.setFontSize(18);
+      doc.setTextColor(30, 30, 30);
+      doc.text('Patient Statement', 14, 18);
+
+      doc.setFontSize(11);
+      doc.setTextColor(80, 80, 80);
+      doc.text(patient.full_name, 14, 26);
+      doc.setFontSize(9);
+      doc.setTextColor(120, 120, 120);
+      const subParts = [`Patient #: ${formatPatientNumber(patient.patient_number) || 'N/A'}`, patient.file_number ? `File #: ${formatFileNumber(patient.file_number)}` : ''].filter(Boolean);
+      doc.text(subParts.join('   ·   '), 14, 32);
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 38);
+
+      // ── Summary Cards ──
+      // Build events chronologically to compute the real final ledger balance
+      const pdfAllEvents = [
+        ...patientBills.map(b => ({ _type: 'bill', _date: new Date(b.bill_date), ...b })),
+        ...paymentHistory.map(p => ({ _type: 'payment', _date: new Date(p.payment_date), ...p }))
+      ].sort((a, b) => a._date.getTime() - b._date.getTime());
+      let pdfRunning = 0;
+      for (const e of pdfAllEvents) {
+        if (e._type === 'bill') pdfRunning += (e.total_amount || 0);
+        else pdfRunning -= (e.amount || 0);
+      }
+      const finalLedgerBalance = pdfRunning; // negative = credit
+
+      const cards = [
+        { label: 'Total Billed', value: `$${billSummary.totalBilled.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: [219, 234, 254] as [number,number,number], textColor: [29, 78, 216] as [number,number,number] },
+        { label: 'Total Paid', value: `$${billSummary.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: [209, 250, 229] as [number,number,number], textColor: [4, 120, 87] as [number,number,number] },
+        ...(finalLedgerBalance < 0 ? [{ label: 'Credit Balance', value: `-$${Math.abs(finalLedgerBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: [237, 233, 254] as [number,number,number], textColor: [109, 40, 217] as [number,number,number] }] : []),
+        { label: 'Outstanding', value: `$${billSummary.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: billSummary.balance > 0 ? [254, 243, 199] as [number,number,number] : [243, 244, 246] as [number,number,number], textColor: billSummary.balance > 0 ? [146, 64, 14] as [number,number,number] : [75, 85, 99] as [number,number,number] },
+        { label: 'Med Aid Bal', value: `$${billSummary.medicalAidBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: [224, 231, 255] as [number,number,number], textColor: [67, 56, 202] as [number,number,number] },
+        { label: 'Bills / Pmts', value: `${patientBills.length} / ${paymentHistory.length}`, color: [243, 244, 246] as [number,number,number], textColor: [55, 65, 81] as [number,number,number] },
+      ];
+
+      const cardW = (pageW - 28 - (cards.length - 1) * 3) / cards.length;
+      const cardY = 44;
+      const cardH = 18;
+      cards.forEach((card, i) => {
+        const x = 14 + i * (cardW + 3);
+        doc.setFillColor(...card.color);
+        doc.roundedRect(x, cardY, cardW, cardH, 2, 2, 'F');
+        doc.setFontSize(6);
+        doc.setTextColor(100, 100, 100);
+        doc.text(card.label.toUpperCase(), x + 3, cardY + 5);
+        doc.setFontSize(9);
+        doc.setTextColor(...card.textColor);
+        doc.setFont(undefined, 'bold');
+        doc.text(card.value, x + 3, cardY + 13);
+        doc.setFont(undefined, 'normal');
+      });
+
+      // ── Transaction Table ──
+      const allEvents = pdfAllEvents;
+      let running = 0;
+      const tableBody = allEvents.map(e => {
+        let debit = '', credit = '', typeStr = '', details = '';
+        if (e._type === 'bill') {
+          running += (e.total_amount || 0);
+          debit = `$${(e.total_amount || 0).toFixed(2)}`;
+          typeStr = 'Invoice';
+          details = (e.status || 'unpaid').replace(/_/g, ' ').toUpperCase();
+        } else {
+          running -= (e.amount || 0);
+          credit = `$${(e.amount || 0).toFixed(2)}`;
+          typeStr = 'Payment';
+          details = (e.payment_method || 'cash').replace(/_/g, ' ');
+        }
+        const bal = running < 0 ? `-$${Math.abs(running).toFixed(2)}` : `$${running.toFixed(2)}`;
+        const dateStr = e._type === 'bill' ? new Date(e.bill_date).toLocaleDateString() : new Date(e.payment_date).toLocaleDateString();
+        return [dateStr, e.bill_number || '', typeStr, details, debit, credit, bal];
+      });
+
+      // Totals row — use final ledger running balance for accuracy
+      const finalBal = finalLedgerBalance < 0 ? `-$${Math.abs(finalLedgerBalance).toFixed(2)} CR` : `$${finalLedgerBalance.toFixed(2)}`;
+      tableBody.push(['', '', 'TOTALS', '', `$${billSummary.totalBilled.toFixed(2)}`, `$${billSummary.totalPaid.toFixed(2)}`, finalBal]);
+
+      autoTable(doc, {
+        head: [['Date', 'Reference', 'Type', 'Details', 'Debit (+)', 'Credit (-)', 'Balance']],
+        body: tableBody,
+        startY: cardY + cardH + 6,
+        styles: { fontSize: 7.5, cellPadding: 2 },
+        headStyles: { fillColor: [16, 185, 129], textColor: 255, fontStyle: 'bold' },
+        columnStyles: {
+          0: { cellWidth: 22 },
+          1: { cellWidth: 24 },
+          2: { cellWidth: 20 },
+          3: { cellWidth: 34 },
+          4: { cellWidth: 26, halign: 'right' },
+          5: { cellWidth: 26, halign: 'right' },
+          6: { cellWidth: 26, halign: 'right' },
+        },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        didParseCell: (data) => {
+          const lastRow = tableBody.length - 1;
+          if (data.row.index === lastRow) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [243, 244, 246];
+          }
+          // Color balance column: violet for negative
+          if (data.column.index === 6 && data.section === 'body') {
+            const val = String(data.cell.raw || '');
+            if (val.includes('CR') || val.startsWith('-')) data.cell.styles.textColor = [109, 40, 217];
+            else if (val.startsWith('$0')) data.cell.styles.textColor = [4, 120, 87];
+            else data.cell.styles.textColor = [146, 64, 14];
+          }
+        }
+      });
+
+      doc.save(`${fname}_${new Date().toISOString().split('T')[0]}.pdf`);
     }
   };
+
 
   const downloadSampleExcel = () => {
     const headers = [
@@ -569,7 +834,7 @@ export function Patients() {
       logs.push(`🎉 Import completed! Successfully imported ${successCount} patient(s).`);
       setImportLogs([...logs]);
       showToast(`Imported ${successCount} patients successfully!`);
-      loadPatients();
+      loadPatients(true);
       
       setParsedPatients(null);
       setImportFile(null);
@@ -1042,64 +1307,80 @@ export function Patients() {
     }
   };
 
-  const loadPatients = async () => {
+  /**
+   * Server-side paginated fetch — loads only the current 25 rows WITH bills.
+   * Much faster than loading all patients upfront.
+   */
+  const fetchPage = useCallback(async (page: number, search: string) => {
     if (!profile?.branch_id && profile?.role !== 'super_admin') return;
-
+    // First load → show full skeleton; subsequent fetches → keep table visible
+    if (!hasLoadedOnce.current) { setLoading(true); } else { setIsFetching(true); }
     try {
-      // 1. Get the real total count (bypasses the 1000-row default limit)
-      let countQuery = supabase
+      let query = supabase
         .from('patients')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'active');
-      if (profile.role !== 'super_admin') {
-        countQuery = countQuery.eq('branch_id', profile.branch_id);
+        .select(
+          `id, title, patient_number, file_number, national_id, full_name,
+           date_of_birth, gender, phone, email, status, address,
+           created_at, branch_id, medical_aid_id,
+           medical_aid:medical_aids(name),
+           bills(balance, total_amount, paid_amount, discount_amount,
+                 medical_aid_amount, shortfall_amount, medical_aid_balance, shortfall_balance)`,
+          { count: 'exact' }
+        )
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .range((page - 1) * itemsPerPage, page * itemsPerPage - 1);
+
+      if (profile!.role !== 'super_admin') query = query.eq('branch_id', profile!.branch_id);
+      if (search.trim()) {
+        query = query.or(
+          `full_name.ilike.%${search.trim()}%,` +
+          `patient_number.ilike.%${search.trim()}%,` +
+          `phone.ilike.%${search.trim()}%,` +
+          `file_number.ilike.%${search.trim()}%,` +
+          `national_id.ilike.%${search.trim()}%`
+        );
       }
-      const { count } = await countQuery;
+      if (filters.gender !== 'all') query = query.eq('gender', filters.gender);
+
+      const { data, count, error } = await query;
+      if (error) throw error;
+
+      const mapped = (data || []).map((p: any) => {
+        const billed = (p.bills || []).reduce((s: number, b: any) => s + (b.total_amount || 0), 0);
+        const paid = (p.bills || []).reduce((s: number, b: any) => s + (b.paid_amount || 0), 0);
+        const net = billed - paid;
+        return {
+          ...p,
+          total_due: Math.max(0, net),
+          credit_balance: net < 0 ? Math.abs(net) : 0,
+          total_shortfall_due: (p.bills || []).reduce((s: number, b: any) => {
+            const sf = b.shortfall_balance ?? 0, paid = b.paid_amount ?? 0, disc = b.discount_amount ?? 0;
+            return s + (sf > 0 ? sf : (b.medical_aid_amount || 0) === 0 ? Math.max(0, (b.total_amount || 0) - disc - paid) : (b.shortfall_amount || 0));
+          }, 0),
+          total_medical_aid_due: (p.bills || []).reduce((s: number, b: any) => {
+            const ma = b.medical_aid_balance ?? 0;
+            return s + (ma > 0 ? ma : (b.medical_aid_amount || 0));
+          }, 0),
+        };
+      });
+
+      setPatients(mapped);
       setTotalPatientCount(count || 0);
-
-      // 2. Load all patient data in pages of 1000 to bypass server-side PostgREST limits
-      let allPatients: any[] = [];
-      let from = 0;
-      const pageSize = 1000;
-
-      while (true) {
-        let query = supabase
-          .from('patients')
-          .select(`
-            *,
-            medical_aid:medical_aids(name),
-            bills(balance, medical_aid_balance, shortfall_balance)
-          `)
-          .eq('status', 'active')
-          .order('created_at', { ascending: false })
-          .range(from, from + pageSize - 1);
-
-        if (profile.role !== 'super_admin') {
-          query = query.eq('branch_id', profile.branch_id);
-        }
-
-        const { data, error } = await query;
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        allPatients = allPatients.concat(data);
-        if (data.length < pageSize) break;
-        from += pageSize;
-      }
-      
-      const patientsWithDue = allPatients.map((p: any) => ({
-        ...p,
-        total_due: p.bills?.reduce((sum: number, inv: any) => sum + (inv.balance || 0), 0) || 0,
-        total_shortfall_due: p.bills?.reduce((sum: number, inv: any) => sum + (inv.shortfall_balance || 0), 0) || 0,
-        total_medical_aid_due: p.bills?.reduce((sum: number, inv: any) => sum + (inv.medical_aid_balance || 0), 0) || 0
-      }));
-
-      setPatients(patientsWithDue);
-    } catch (error) {
-      console.error('Error loading patients:', error);
+      hasLoadedOnce.current = true;
+    } catch (err) {
+      console.error('Error fetching patients:', err);
     } finally {
       setLoading(false);
+      setIsFetching(false);
     }
-  };
+  }, [profile, filters, itemsPerPage]);
+
+  // Keep loadPatients as a thin wrapper for backward-compat call sites
+  const loadPatients = useCallback((force = false) => {
+    setCurrentPage(1);
+    fetchPage(1, debouncedSearch);
+  }, [fetchPage, debouncedSearch]);
 
   const loadDoctors = async () => {
     if (!profile?.branch_id && profile?.role !== 'super_admin') return;
@@ -1146,11 +1427,11 @@ export function Patients() {
         .select('file_number, is_occupied')
         .order('file_number', { ascending: true });
 
-      // 2. Fetch file_numbers from discharged & deceased patients
+      // 2. Fetch file_numbers from discharged, deceased & old/inactive patients
       const { data: inactivePatients } = await supabase
         .from('patients')
         .select('file_number, full_name, patient_number, status')
-        .in('status', ['discharged', 'deceased']);
+        .in('status', ['discharged', 'deceased', 'inactive', 'old_patient']);
 
       const poolMap = new Map<string, any>();
 
@@ -1168,7 +1449,7 @@ export function Patients() {
       (inactivePatients || []).forEach(p => {
         if (p.file_number) {
           const fn = p.file_number.split('-')[0].trim();
-          const tag = p.status === 'discharged' ? 'Discharged' : 'Deceased';
+          const tag = p.status === 'discharged' ? 'Discharged' : p.status === 'deceased' ? 'Deceased' : 'Old Patient';
           poolMap.set(fn, {
             file_number: fn,
             is_occupied: false,
@@ -1208,7 +1489,7 @@ export function Patients() {
   const generatePatientNumber = (indexOffset = 0) => {
     const timestamp = (Date.now() + indexOffset).toString().slice(-6);
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    return `P${timestamp}${random}`;
+    return `${timestamp}${random}`;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1224,15 +1505,44 @@ export function Patients() {
         ])
       );
 
+      // 1. Check if Email exists
+      const isEmailValid = await validateEmail(formData.email);
+      // 2. Check if File Number is occupied by an active patient
+      const isFileNumberValid = await validateFileNumber(formData.file_number);
+
+      if (!isEmailValid || !isFileNumberValid) {
+        setCurrentTab('personal');
+        return;
+      }
+
       if (editingPatient) {
-        const { error } = await supabase
-          .from('patients')
-          .update({
+        const reqStatus = (sanitizedData as any).status;
+        const isOldPatient = reqStatus === 'old_patient' || reqStatus === 'inactive';
+        const finalStatus = isOldPatient ? 'inactive' : (reqStatus || editingPatient.status || 'active');
+
+        let updatePayload: any;
+        if (isOldPatient) {
+          // When marking as Old Patient: ONLY update status and file_number (release to pool).
+          // Do NOT touch email, national_id, name, or any other patient data.
+          updatePayload = {
+            status: 'inactive',
+            file_number: null,
+            updated_at: new Date().toISOString()
+          };
+        } else {
+          updatePayload = {
             ...sanitizedData,
+            status: finalStatus,
+            file_number: (formData.file_number && formData.file_number !== editingPatient.file_number ? formData.file_number : editingPatient.file_number),
             // Don't update password if it's empty
             ...(dbData.password ? { password: dbData.password } : {}),
             updated_at: new Date().toISOString()
-          })
+          };
+        }
+
+        const { error } = await supabase
+          .from('patients')
+          .update(updatePayload)
           .eq('id', editingPatient.id);
 
         if (error) throw error;
@@ -1256,14 +1566,14 @@ export function Patients() {
         }
       } else {
         const patientNumber = generatePatientNumber();
-        const generatedEmail = sanitizedData.email || `patient.${patientNumber.toLowerCase()}@spiritmed.com`;
+        const finalEmail = sanitizedData.email ? String(sanitizedData.email).trim() : null;
         const generatedPassword = sanitizedData.password || 'patient123456';
 
         const { error, data } = await supabase
           .from('patients')
           .insert([{
             ...sanitizedData,
-            email: generatedEmail,
+            email: finalEmail,
             password: generatedPassword,
             branch_id: profile?.branch_id,
             patient_number: patientNumber,
@@ -1293,7 +1603,7 @@ export function Patients() {
 
       setShowModal(false);
       resetForm();
-      loadPatients();
+      loadPatients(true);
       showToast('Patient saved successfully!');
     } catch (error) {
       console.error('Error saving patient:', error);
@@ -1338,6 +1648,7 @@ export function Patients() {
       medical_aid_main_member: patient.medical_aid_main_member || '',
       referral_doctor_id: patient.referral_doctor_id || '',
       file_number: patient.file_number || '',
+      status: patient.status || 'active',
       send_sms: patient.send_sms || false
     });
     setShowModal(true);
@@ -1379,6 +1690,7 @@ export function Patients() {
       medical_aid_main_member: '',
       referral_doctor_id: '',
       file_number: '',
+      status: 'active',
       send_sms: false
     });
     setEditingPatient(null);
@@ -1407,10 +1719,156 @@ export function Patients() {
               newValues: { status: 'inactive' }
           });
       }
-      loadPatients();
+      loadPatients(true);
     } catch (error: any) {
       console.error('Error archiving patient:', error);
       alert(`Failed to archive patient: ${error?.message || error?.details || 'Unknown error'}`);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedPatientIds.length === 0) return;
+    if (!confirm(`PERMANENT BULK DELETE CONFIRMATION:\n\nAre you sure you want to PERMANENTLY delete ${selectedPatientIds.length} selected patients?\n\nThis will also delete all linked clinical files, consultations, prescriptions, bills, payments, appointments, and vitals.\n\nThis action CANNOT be undone.`)) return;
+
+    setBulkDeleting(true);
+    try {
+      const ids = selectedPatientIds;
+
+      await supabase.from('patient_files').delete().in('patient_id', ids);
+
+      const { data: bills } = await supabase.from('bills').select('id').in('patient_id', ids);
+      const billIds = (bills || []).map((b: any) => b.id);
+      if (billIds.length > 0) {
+        await supabase.from('payments').delete().in('bill_id', billIds);
+        await supabase.from('bill_items').delete().in('bill_id', billIds);
+      }
+      await supabase.from('bills').delete().in('patient_id', ids);
+
+      const { data: consults } = await supabase.from('consultations').select('id').in('patient_id', ids);
+      const consultIds = (consults || []).map((c: any) => c.id);
+      if (consultIds.length > 0) {
+        const { data: presc } = await supabase.from('prescriptions').select('id').in('consultation_id', consultIds);
+        const prescIds = (presc || []).map((p: any) => p.id);
+        if (prescIds.length > 0) {
+          await supabase.from('prescription_items').delete().in('prescription_id', prescIds);
+        }
+        await supabase.from('prescriptions').delete().in('consultation_id', consultIds);
+      }
+      await supabase.from('consultations').delete().in('patient_id', ids);
+      await supabase.from('appointments').delete().in('patient_id', ids);
+      await supabase.from('vital_signs').delete().in('patient_id', ids);
+
+      const { error } = await supabase.from('patients').delete().in('id', ids);
+      if (error) throw error;
+
+      setSelectedPatientIds([]);
+      invalidatePatientsCache();
+      await loadPatients(true);
+      showToast(`Successfully deleted ${ids.length} selected patients.`);
+    } catch (err: any) {
+      console.error('Error bulk deleting patients:', err);
+      alert('Failed to bulk delete patients: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const handleMarkOldPatient = async () => {
+    if (!selectedPatientForStatus) return;
+
+    try {
+      setLoading(true);
+      const updateData: any = {
+        status: 'inactive',
+        file_number: null,
+        updated_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
+        .from('patients')
+        .update(updateData)
+        .eq('id', selectedPatientForStatus.id);
+
+      if (error) throw error;
+
+      if (profile?.id && profile?.branch_id) {
+        await logActivity(supabase, {
+          userId: profile.id,
+          branchId: profile.branch_id,
+          action: 'UPDATE',
+          tableName: 'patients',
+          recordId: selectedPatientForStatus.id,
+          details: `Marked patient as Old Patient & released File Number (${selectedPatientForStatus.file_number || 'N/A'})`,
+          newValues: { status: 'inactive', file_number: null }
+        });
+      }
+
+      setShowOldPatientModal(false);
+      setSelectedPatientForStatus(null);
+      loadPatients(true);
+      showToast(`Patient ${selectedPatientForStatus.full_name} set as Old Patient and file number released.`);
+    } catch (error: any) {
+      console.error('Error marking old patient:', error);
+      showToast('Failed to update patient status', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInlineStatusChange = async (patient: Patient, newStatus: string) => {
+    if (newStatus === patient.status) return;
+
+    if (newStatus === 'discharged') {
+      setSelectedPatientForStatus(patient);
+      setShowDischargedModal(true);
+      return;
+    }
+
+    if (newStatus === 'deceased') {
+      setSelectedPatientForStatus(patient);
+      setShowDeceasedModal(true);
+      return;
+    }
+
+    if (newStatus === 'old_patient') {
+      setSelectedPatientForStatus(patient);
+      setShowOldPatientModal(true);
+      return;
+    }
+
+    if (newStatus === 'active') {
+      try {
+        setLoading(true);
+        const { error } = await supabase
+          .from('patients')
+          .update({
+            status: 'active',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', patient.id);
+
+        if (error) throw error;
+
+        if (profile?.id && profile?.branch_id) {
+          await logActivity(supabase, {
+            userId: profile.id,
+            branchId: profile.branch_id,
+            action: 'UPDATE',
+            tableName: 'patients',
+            recordId: patient.id,
+            details: `Changed patient status to Active for ${patient.full_name}`,
+            newValues: { status: 'active' }
+          });
+        }
+
+        showToast(`Patient ${patient.full_name} status updated to Active.`);
+        loadPatients(true);
+      } catch (err: any) {
+        console.error('Error setting active status:', err);
+        showToast('Failed to update patient status', 'error');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -1494,7 +1952,7 @@ export function Patients() {
       showToast(`Patient marked as ${status} successfully`);
       setShowDeceasedModal(false);
       setShowDischargedModal(false);
-      loadPatients();
+      loadPatients(true);
       loadFileNumberPool();
 
       setStatusFormData({
@@ -1567,7 +2025,7 @@ export function Patients() {
       alert('Patient approved successfully!');
       setShowPendingModal(false);
       setSelectedPending(null);
-      loadPatients();
+      loadPatients(true);
       loadPendingPatients();
     } catch (err: any) {
       console.error('Error approving patient:', err);
@@ -1658,25 +2116,20 @@ export function Patients() {
     exportToPDF(headers, data, 'Spiritmed Patient Directory', 'spiritmed_patients');
   };
 
-  const filteredPatients = patients.filter(patient => {
-    const matchesSearch =
-      patient.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      patient.patient_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (patient.file_number && patient.file_number.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (patient.phone && patient.phone.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    const matchesGender = filters.gender === 'all' || patient.gender === filters.gender;
-    const matchesBalance = filters.hasBalance === 'all' || 
-                          (filters.hasBalance === 'due' && (patient.total_due || 0) > 0) ||
-                          (filters.hasBalance === 'none' && (patient.total_due || 0) <= 0);
-
-    return matchesSearch && matchesGender && matchesBalance;
-  });
+  // Server already filtered by search/gender — apply only the balance filter client-side
+  const filteredPatients = filters.hasBalance === 'all' ? patients
+    : filters.hasBalance === 'credit'
+    ? patients.filter(p => (p.credit_balance || 0) > 0)
+    : patients.filter(p =>
+        filters.hasBalance === 'due' ? (p.total_due || 0) > 0 : (p.total_due || 0) <= 0
+      );
 
   const totalClinicReceivable = filteredPatients.reduce((sum, p) => sum + (p.total_due || 0), 0);
+  const totalClinicCredit = filteredPatients.reduce((sum, p) => sum + (p.credit_balance || 0), 0);
 
-  const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
-  const paginated = filteredPatients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  // Pagination is server-side — patients already IS the current page
+  const totalPages = Math.max(1, Math.ceil(totalPatientCount / itemsPerPage));
+  const paginated = filteredPatients;
 
   const getAge = (dob: string) => {
     const today = new Date();
@@ -1788,6 +2241,12 @@ export function Patients() {
           <div className="text-xs text-amber-500 uppercase font-bold mb-1">Total Dues</div>
           <div className="text-2xl font-bold text-amber-600">${totalClinicReceivable.toLocaleString()}</div>
         </div>
+        {totalClinicCredit > 0 && (
+          <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-violet-200 dark:border-violet-800">
+            <div className="text-xs text-violet-500 uppercase font-bold mb-1">Total Credit Balance</div>
+            <div className="text-2xl font-bold text-violet-600">${totalClinicCredit.toLocaleString()}</div>
+          </div>
+        )}
       </div>
 
       {activeSubTab === 'all' ? (
@@ -1795,14 +2254,22 @@ export function Patients() {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
             <div className="flex flex-col md:flex-row gap-3">
           <div className="flex flex-col md:flex-row gap-3 w-full">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                {isFetching && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full border-2 border-green-400 border-t-transparent animate-spin" />
+                )}
                 <input
                   type="text"
                   placeholder="ID, Name, or Phone..."
                   value={searchQuery}
-                  onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-                  className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm outline-none bg-white dark:bg-gray-700"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSearchQuery(val);
+                    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+                    searchDebounceRef.current = setTimeout(() => { setDebouncedSearch(val); setCurrentPage(1); }, 400);
+                  }}
+                  className="w-full pl-9 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm outline-none bg-white dark:bg-gray-700"
                 />
               </div>
               <div className="flex gap-2">
@@ -1881,11 +2348,11 @@ export function Patients() {
                     </h3>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-[11px] font-mono font-bold text-blue-600 dark:text-blue-400">
-                        ID: {patient.patient_number ? patient.patient_number.split('-')[0] : ''}
+                        ID: {patient.patient_number ? formatPatientNumber(patient.patient_number) : ''}
                       </span>
                       {patient.file_number && (
                         <span className="text-[10px] font-mono bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300 px-1.5 py-0.5 rounded-sm font-bold">
-                          File: {patient.file_number.split('-')[0]}
+                          File: {formatFileNumber(patient.file_number)}
                         </span>
                       )}
                     </div>
@@ -1905,10 +2372,17 @@ export function Patients() {
                   </a>
                 </div>
                 <div>
-                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Financial Due</span>
-                  <span className={`font-black ${ (patient.total_due || 0) > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
-                    ${(patient.total_due || 0).toLocaleString()}
-                  </span>
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">{(patient.credit_balance || 0) > 0 ? 'Credit Balance' : 'Financial Due'}</span>
+                  {(patient.credit_balance || 0) > 0 ? (
+                    <span className="font-black text-violet-600">
+                      -${(patient.credit_balance || 0).toLocaleString()}
+                      <span className="ml-1 px-1 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 text-[9px] font-black rounded">CR</span>
+                    </span>
+                  ) : (
+                    <span className={`font-black ${ (patient.total_due || 0) > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                      ${(patient.total_due || 0).toLocaleString()}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1920,6 +2394,13 @@ export function Patients() {
                     title="View Profile"
                   >
                     <Eye className="w-4 h-4 text-green-600" />
+                  </button>
+                  <button
+                    onClick={() => window.location.href = `/patient-history?patientId=${patient.id}`}
+                    className="p-2 bg-gray-100 dark:bg-gray-700 hover:bg-purple-50 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
+                    title="Patient History"
+                  >
+                    <History className="w-4 h-4 text-purple-600" />
                   </button>
                   <button
                     onClick={() => handleEdit(patient)}
@@ -1958,32 +2439,95 @@ export function Patients() {
         )}
       </div>
 
+      {/* Floating Bulk Action Bar */}
+      {selectedPatientIds.length > 0 && (
+        <div className="bg-gradient-to-r from-red-600 to-rose-700 text-white p-3 rounded-2xl shadow-xl flex items-center justify-between gap-4 animate-in slide-in-from-bottom-4 duration-200 mb-4">
+          <div className="flex items-center gap-3">
+            <span className="bg-white text-red-700 text-xs font-black px-2.5 py-1 rounded-lg">
+              {selectedPatientIds.length} Selected
+            </span>
+            <span className="text-xs font-extrabold hidden sm:inline">Bulk actions available for selected patients</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedPatientIds([])}
+              className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-xl transition"
+            >
+              Clear
+            </button>
+            <button
+              disabled={bulkDeleting}
+              onClick={handleBulkDelete}
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-white text-red-700 hover:bg-red-50 text-xs font-black rounded-xl transition shadow-sm disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>{bulkDeleting ? 'Deleting...' : `Delete Selected (${selectedPatientIds.length})`}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 💻 Desktop Table View (>= md) */}
       <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead className="bg-gray-100 dark:bg-gray-900 border-b-2 border-gray-200 dark:border-gray-700">
               <tr className="divide-x dark:divide-gray-700">
+                <th className="px-3 py-3 text-center text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider w-10">
+                  <input
+                    type="checkbox"
+                    checked={paginated.length > 0 && paginated.every(p => selectedPatientIds.includes(p.id))}
+                    onChange={() => {
+                      const isAll = paginated.length > 0 && paginated.every(p => selectedPatientIds.includes(p.id));
+                      if (isAll) {
+                        const pageIds = paginated.map(p => p.id);
+                        setSelectedPatientIds(prev => prev.filter(id => !pageIds.includes(id)));
+                      } else {
+                        const pageIds = paginated.map(p => p.id);
+                        setSelectedPatientIds(prev => Array.from(new Set([...prev, ...pageIds])));
+                      }
+                    }}
+                    className="rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                  />
+                </th>
                 <th className="px-5 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">Patient</th>
                 <th className="px-4 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">Patient ID</th>
                 <th className="px-4 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">National ID</th>
                 <th className="px-4 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">File No</th>
                 <th className="px-4 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">Age / Gender</th>
                 <th className="px-4 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">Contact</th>
-                <th className="px-4 py-3 text-left text-xs font-extrabold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Financials</th>
+                <th className="px-4 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-extrabold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                  <div className="flex items-center gap-1.5">
+                    Balance
+                    {billsLoading && (
+                      <div className="w-3 h-3 rounded-full border border-amber-400 border-t-transparent animate-spin" title="Loading financial data..." />
+                    )}
+                  </div>
+                </th>
                 <th className="px-5 py-3 text-left text-xs font-extrabold text-gray-700 dark:text-gray-200 uppercase tracking-wider">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-sm font-bold text-gray-500 dark:text-gray-400">
+                  <td colSpan={10} className="px-6 py-12 text-center text-sm font-bold text-gray-500 dark:text-gray-400">
                     No patients found
                   </td>
                 </tr>
               ) : (
-                paginated.map((patient, idx) => (
-                  <tr key={patient.id} className="hover:bg-gray-100/70 dark:hover:bg-gray-900/60 transition divide-x dark:divide-gray-700">
+                paginated.map((patient, idx) => {
+                  const isSelected = selectedPatientIds.includes(patient.id);
+                  return (
+                    <tr key={patient.id} className={`hover:bg-gray-100/70 dark:hover:bg-gray-900/60 transition divide-x dark:divide-gray-700 ${isSelected ? 'bg-green-50/50 dark:bg-green-950/20' : ''}`}>
+                      <td className="px-3 py-3.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => setSelectedPatientIds(prev => prev.includes(patient.id) ? prev.filter(x => x !== patient.id) : [...prev, patient.id])}
+                          className="rounded border-gray-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                        />
+                      </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="text-xs font-extrabold text-gray-400 dark:text-gray-500 font-mono">{(currentPage - 1) * itemsPerPage + idx + 1}</div>
@@ -1993,13 +2537,13 @@ export function Patients() {
                       </div>
                     </td>
                     <td className="px-4 py-3.5">
-                      <div className="text-xs font-extrabold text-blue-600 dark:text-blue-400 font-mono">{patient.patient_number ? patient.patient_number.split('-')[0] : ''}</div>
+                      <div className="text-xs font-extrabold text-blue-600 dark:text-blue-400 font-mono">{patient.patient_number ? formatPatientNumber(patient.patient_number) : ''}</div>
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="text-sm font-extrabold font-mono text-gray-800 dark:text-gray-100">{patient.national_id || <span className="text-gray-400 dark:text-gray-500 font-bold">N/A</span>}</div>
                     </td>
                     <td className="px-4 py-3.5">
-                      <div className="text-xs font-extrabold text-green-600 dark:text-green-400 font-mono">{patient.file_number ? patient.file_number.split('-')[0] : <span className="text-gray-400">NO FILE</span>}</div>
+                      <div className="text-xs font-extrabold text-green-600 dark:text-green-400 font-mono">{patient.file_number ? formatFileNumber(patient.file_number) : <span className="text-gray-400">NO FILE</span>}</div>
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="text-sm font-extrabold text-gray-800 dark:text-gray-100">{patient.date_of_birth ? `${getAge(patient.date_of_birth)} YRS` : 'N/A'}</div>
@@ -2009,8 +2553,35 @@ export function Patients() {
                       <div className="flex items-center gap-1.5 text-sm font-extrabold text-gray-800 dark:text-gray-100"><Phone className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />{patient.phone}</div>
                       {patient.email && <div className="flex items-center gap-1.5 text-xs font-extrabold text-gray-500 dark:text-gray-400 mt-0.5"><Mail className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" />{patient.email}</div>}
                     </td>
+                    <td className="px-4 py-3.5 whitespace-nowrap">
+                      <select
+                        value={(patient.status === 'inactive' || patient.status === 'old_patient' || patient.status === 'old') ? 'old_patient' : patient.status || 'active'}
+                        onChange={(e) => handleInlineStatusChange(patient, e.target.value)}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg outline-none cursor-pointer border transition-colors ${
+                          patient.status === 'discharged'
+                            ? 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950/60 dark:text-orange-300 dark:border-orange-800'
+                            : patient.status === 'deceased'
+                            ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
+                            : (patient.status === 'inactive' || patient.status === 'old_patient' || patient.status === 'old')
+                            ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
+                            : 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+                        }`}
+                      >
+                        <option value="active" className="bg-white text-gray-900 dark:bg-gray-800 dark:text-white">Active</option>
+                        <option value="discharged" className="bg-white text-gray-900 dark:bg-gray-800 dark:text-white">Discharged</option>
+                        <option value="deceased" className="bg-white text-gray-900 dark:bg-gray-800 dark:text-white">Deceased</option>
+                        <option value="old_patient" className="bg-white text-gray-900 dark:bg-gray-800 dark:text-white">Old Patient (Release File #)</option>
+                      </select>
+                    </td>
                     <td className="px-4 py-3.5 bg-amber-50/20 dark:bg-amber-950/5">
-                      {patient.medical_aid_id || patient.medical_aid ? (
+                      {(patient.credit_balance || 0) > 0 ? (
+                        <div className="text-right">
+                          <span className="text-sm font-black text-violet-600 dark:text-violet-400">
+                            -${(patient.credit_balance || 0).toLocaleString()}
+                          </span>
+                          <span className="ml-1 px-1 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 text-[9px] font-black rounded">CR</span>
+                        </div>
+                      ) : patient.medical_aid_id || patient.medical_aid ? (
                         <div className="space-y-1">
                           <div className="flex justify-between items-center gap-4"><span className="text-[10px] font-extrabold text-rose-500 dark:text-rose-400 uppercase tracking-wider">Shortfall</span><span className={`text-sm font-black ${ (patient.total_shortfall_due || 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-gray-300 dark:text-gray-600'}`}>${(patient.total_shortfall_due || 0).toLocaleString()}</span></div>
                           <div className="flex justify-between items-center gap-4"><span className="text-[10px] font-extrabold text-amber-500 dark:text-amber-400 uppercase tracking-wider">Total</span><span className={`text-sm font-black ${ (patient.total_due || 0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-600'}`}>${(patient.total_due || 0).toLocaleString()}</span></div>
@@ -2027,6 +2598,13 @@ export function Patients() {
                           title="View Records"
                         >
                           <Eye className="w-5 h-5" />
+                        </button>
+                        <button 
+                          onClick={() => window.location.href = `/patient-history?patientId=${patient.id}`}
+                          className="p-1.5 hover:bg-purple-50 dark:hover:bg-purple-950/20 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 rounded-lg transition-colors"
+                          title="Patient History"
+                        >
+                          <History className="w-5 h-5" />
                         </button>
                         <button
                           onClick={() => window.location.href = `/consultations?patientId=${patient.id}`}
@@ -2063,52 +2641,25 @@ export function Patients() {
                         >
                           <Share2 className="w-5 h-5" />
                         </button>
-                        {hasPermission('patients', 'edit') && (
-                          <button
-                            onClick={() => handleEdit(patient)}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-655 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 rounded-lg transition-colors"
-                            title="Edit Patient"
-                          >
-                            <Edit2 className="w-5 h-5" />
-                          </button>
-                        )}
-                        {hasPermission('patients', 'edit') && (
-                          <button
-                            onClick={() => {
-                              setSelectedPatientForStatus(patient);
-                              setShowDeceasedModal(true);
-                            }}
-                            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-900 dark:text-gray-100 hover:text-red-600 dark:hover:text-red-400 rounded-lg transition-colors"
-                            title="Mark Deceased"
-                          >
-                            <Skull className="w-5 h-5" />
-                          </button>
-                        )}
-                        {hasPermission('patients', 'edit') && (
-                          <button
-                            onClick={() => {
-                              setSelectedPatientForStatus(patient);
-                              setShowDischargedModal(true);
-                            }}
-                            className="p-1.5 hover:bg-orange-50 dark:hover:bg-orange-950/20 text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 rounded-lg transition-colors"
-                            title="Mark Discharged"
-                          >
-                            <LogOut className="w-5 h-5" />
-                          </button>
-                        )}
-                        {hasPermission('patients', 'delete') && (
-                          <button
-                            onClick={() => handleDelete(patient.id, patient.full_name)}
-                            className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/20 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 rounded-lg transition-colors"
-                            title="Delete Patient"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleEdit(patient)}
+                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300 rounded-lg transition-colors"
+                          title="Edit Patient"
+                        >
+                          <Edit2 className="w-5 h-5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(patient.id, patient.full_name)}
+                          className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/20 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 rounded-lg transition-colors"
+                          title="Delete Patient"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
                       </div>
                     </td>
                   </tr>
-                ))
+                );
+              })
               )}
             </tbody>
           </table>
@@ -2333,6 +2884,19 @@ export function Patients() {
                         <option value="Prof">Prof</option>
                       </select>
                     </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Patient Status</label>
+                      <select
+                        value={formData.status}
+                        onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
+                      >
+                        <option value="active">Active</option>
+                        <option value="discharged">Discharged</option>
+                        <option value="deceased">Deceased</option>
+                        <option value="old_patient">Old Patient (Release File #)</option>
+                      </select>
+                    </div>
                     <div className="md:col-span-2">
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name *</label>
                       <input
@@ -2351,10 +2915,17 @@ export function Patients() {
                           value={formData.file_number}
                           onFocus={() => setShowFileDropdown(true)}
                           onChange={(e) => {
-                            setFormData({ ...formData, file_number: e.target.value });
+                            const val = e.target.value;
+                            setFormData({ ...formData, file_number: val });
                             setShowFileDropdown(true);
+                            validateFileNumber(val);
                           }}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                          onBlur={(e) => validateFileNumber(e.target.value)}
+                          className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm ${
+                            fileNumberError
+                              ? 'border-red-500 focus:ring-red-500 text-red-900 dark:text-red-200'
+                              : 'border-gray-300 dark:border-gray-600 focus:ring-green-500'
+                          }`}
                           placeholder="Type or select file..."
                         />
                         
@@ -2374,6 +2945,7 @@ export function Patients() {
                                         onClick={() => {
                                           setFormData({ ...formData, file_number: f.file_number });
                                           setShowFileDropdown(false);
+                                          validateFileNumber(f.file_number);
                                         }}
                                         className="w-full text-left px-4 py-2.5 text-xs hover:bg-green-50 dark:hover:bg-green-900/20 text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-700/50 last:border-0 font-mono flex items-center justify-between gap-2"
                                       >
@@ -2392,6 +2964,13 @@ export function Patients() {
                         {fileNumberPool.length > 0 && (
                           <div className="text-[9px] font-bold text-gray-400 mt-1 uppercase tracking-tight">
                             Available in Pool: {fileNumberPool.filter(f => !f.is_occupied).length} free files
+                          </div>
+                        )}
+
+                        {fileNumberError && (
+                          <div className="mt-1.5 text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-md p-2 flex items-center gap-1.5 shadow-xs">
+                            <span className="shrink-0 text-sm">⚠️</span>
+                            <span>{fileNumberError}</span>
                           </div>
                         )}
                       </div>
@@ -2426,16 +3005,40 @@ export function Patients() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
                       <input
-                        type="email"
+                        type="text"
+                        inputMode="email"
+                        name="patient_email_no_autofill"
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
                         value={formData.email}
-                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData({ ...formData, email: val });
+                          validateEmail(val);
+                        }}
+                        onBlur={(e) => validateEmail(e.target.value)}
+                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${
+                          emailError
+                            ? 'border-red-500 focus:ring-red-500 text-red-900 dark:text-red-200'
+                            : 'border-gray-300 dark:border-gray-600 focus:ring-green-500'
+                        }`}
+                        placeholder="patient@example.com"
                       />
+                      {emailError && (
+                        <div className="mt-1.5 text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-md p-2 flex items-center gap-1.5 shadow-xs">
+                          <span className="shrink-0 text-sm">⚠️</span>
+                          <span>{emailError}</span>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
                       <input
                         type="password"
+                        name="patient_password_no_autofill"
+                        autoComplete="new-password"
                         value={formData.password}
                         onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -3000,6 +3603,56 @@ export function Patients() {
                 >
                     {loading ? 'Processing...' : 'Complete Discharge & Save Summary'}
                 </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark Old Patient Modal */}
+      {showOldPatientModal && selectedPatientForStatus && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6 border border-gray-200 dark:border-gray-700">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <UserX className="w-6 h-6 text-amber-500" />
+                Mark as Old Patient
+              </h2>
+              <button
+                onClick={() => setShowOldPatientModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="space-y-3 mb-6 text-sm">
+              <p className="text-gray-700 dark:text-gray-300">
+                Are you sure you want to change status of <strong className="text-gray-900 dark:text-white">{selectedPatientForStatus.full_name}</strong> to <strong className="text-amber-600 dark:text-amber-400">Old Patient</strong>?
+              </p>
+              {selectedPatientForStatus.file_number && (
+                <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 p-3 rounded-lg text-xs text-amber-800 dark:text-amber-300 font-medium">
+                  ⚡ <strong>File Number Release:</strong> File Number <span className="font-mono font-bold">{selectedPatientForStatus.file_number}</span> will be unallocated and released back to the File Number Pool for reuse.
+                </div>
+              )}
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                This patient record will be moved to the <strong>Old Patients</strong> module and can be reactivated at any time.
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowOldPatientModal(false)}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleMarkOldPatient}
+                disabled={loading}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-sm flex items-center gap-2 shadow-md transition disabled:opacity-50"
+              >
+                {loading ? 'Updating...' : 'Confirm & Release File Number'}
+              </button>
             </div>
           </div>
         </div>
@@ -3687,126 +4340,307 @@ export function Patients() {
         </div>
       )}
 
-      {/* Patient Payment History Modal */}
-      {showHistoryModal && selectedPatientForHistory && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-gray-100 dark:border-gray-700 animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
-            
-            {/* Header */}
-            <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-700 pb-4 mb-6">
-              <div>
-                <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-2">
-                  <CreditCard className="w-5 h-5 text-amber-500" />
-                  Patient Payment Ledger & History
-                </h2>
-                <p className="text-xs text-gray-500 font-bold mt-1">
-                  Viewing ledger for: <span className="text-amber-500 uppercase font-extrabold">{selectedPatientForHistory.full_name}</span> ({selectedPatientForHistory.patient_number})
-                </p>
-              </div>
-              <button 
-                onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); }}
-                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition"
-              >
-                <X className="w-5 h-5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" />
-              </button>
-            </div>
+      {/* Patient Payment Ledger & Statement Modal */}
+      {showHistoryModal && selectedPatientForHistory && (() => {
+        // Build combined chronological timeline
+        const searchQ = historySearch.toLowerCase();
+        const allEvents: any[] = [
+          ...patientBills.map(b => ({ ...b, _type: 'bill', _date: new Date(b.bill_date) })),
+          ...paymentHistory.map(p => ({ ...p, _type: 'payment', _date: new Date(p.payment_date) }))
+        ]
+          .sort((a, b) => a._date.getTime() - b._date.getTime())
+          .filter(e => {
+            if (!searchQ) return true;
+            if (e._type === 'bill') return (e.bill_number || '').toLowerCase().includes(searchQ) || (e.status || '').toLowerCase().includes(searchQ);
+            return (e.bill_number || '').toLowerCase().includes(searchQ) || (e.payment_method || '').toLowerCase().includes(searchQ) || (e.notes || '').toLowerCase().includes(searchQ);
+          });
 
-            {/* Toolbar Filters & Exports */}
-            <div className="bg-gray-50/50 dark:bg-gray-900/20 border border-gray-100 dark:border-gray-700 p-3 rounded-xl flex flex-col md:flex-row gap-3 mb-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input 
-                  type="text" 
-                  placeholder="Search invoice number, payment method..." 
-                  value={historySearch}
-                  onChange={e => setHistorySearch(e.target.value)}
-                  className="w-full pl-9 pr-4 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-xs outline-none focus:ring-2 focus:ring-amber-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
-                />
+        // Compute running balance (per-row ledger)
+        // Invoice debit = total_amount (what's displayed), Payment credit = amount
+        let running = 0;
+        const eventsWithRunning = allEvents.map(e => {
+          if (e._type === 'bill') {
+            running += (e.total_amount || 0);
+          } else {
+            running -= (e.amount || 0);
+          }
+          return { ...e, _running: running };
+        });
+
+        const mostRecentPayment = [...paymentHistory].sort((a,b) => new Date(b.payment_date).getTime() - new Date(a.payment_date).getTime())[0];
+
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-5xl shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[92vh]">
+
+              {/* ── Header ── */}
+              <div className="flex justify-between items-start px-6 py-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-t-2xl flex-shrink-0">
+                <div>
+                  <h2 className="text-lg font-black text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-amber-500" />
+                    Patient Statement
+                  </h2>
+                  <p className="text-xs text-gray-500 font-semibold mt-0.5">
+                    <span className="text-amber-600 font-black uppercase">{selectedPatientForHistory.full_name}</span>
+                    {' · '}{selectedPatientForHistory.patient_number}
+                    {selectedPatientForHistory.file_number && <span className="ml-2 px-1.5 py-0.5 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 rounded text-[9px] font-black uppercase">File: {selectedPatientForHistory.file_number}</span>}
+                  </p>
+                </div>
+                {/* Action buttons */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); navigateToBills({ preselectedPatient: selectedPatientForHistory }); }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-black uppercase tracking-wide transition shadow-sm"
+                    title="Create new bill for this patient"
+                  >
+                    <FileText className="w-3.5 h-3.5" /> New Bill
+                  </button>
+                  <button
+                    onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); navigateToBills({ preselectedPatient: selectedPatientForHistory, openPayment: true }); }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-black uppercase tracking-wide transition shadow-sm"
+                    title="Record payment for this patient"
+                  >
+                    <DollarSign className="w-3.5 h-3.5" /> Record Payment
+                  </button>
+                  <button onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); }} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition ml-1">
+                    <X className="w-5 h-5 text-gray-400" />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => handleExportHistory('excel', paymentHistory.filter(p => !historySearch || p.bill_number?.toLowerCase().includes(historySearch.toLowerCase()) || p.payment_method?.toLowerCase().includes(historySearch.toLowerCase()) || p.target_portion?.toLowerCase().includes(historySearch.toLowerCase())))} 
+
+              {/* ── Summary Strip ── */}
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3 px-6 py-4 flex-shrink-0 border-b border-gray-100 dark:border-gray-700">
+                <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-800/40 rounded-xl p-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-blue-400 mb-0.5">Total Billed</p>
+                  <p className="text-base font-black text-blue-700 dark:text-blue-300">${billSummary.totalBilled.toLocaleString(undefined,{minimumFractionDigits:2})}</p>
+                </div>
+                <div className="bg-green-50 dark:bg-green-950/20 border border-green-100 dark:border-green-800/40 rounded-xl p-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-green-400 mb-0.5">Total Paid</p>
+                  <p className="text-base font-black text-green-700 dark:text-green-300">${billSummary.totalPaid.toLocaleString(undefined,{minimumFractionDigits:2})}</p>
+                </div>
+                {/* Credit Balance card — uses final ledger running balance (accounts for invoices after overpayment) */}
+                {(() => { const finalRunning = eventsWithRunning.length > 0 ? eventsWithRunning[eventsWithRunning.length - 1]._running : 0; return finalRunning < 0 ? (
+                  <div className="bg-violet-50 dark:bg-violet-950/20 border border-violet-200 dark:border-violet-800/40 rounded-xl p-3">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-violet-500 mb-0.5">Credit Balance</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-base font-black text-violet-700 dark:text-violet-300">-${Math.abs(finalRunning).toLocaleString(undefined,{minimumFractionDigits:2})}</p>
+                      <span className="px-1.5 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 text-[8px] font-black uppercase rounded-full tracking-widest">CR</span>
+                    </div>
+                  </div>
+                ) : <div className="hidden md:block" />; })()}
+                <div className={`rounded-xl p-3 border ${billSummary.balance > 0 ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-100 dark:border-amber-800/40' : 'bg-gray-50 dark:bg-gray-900/20 border-gray-100 dark:border-gray-700'}`}>
+                  <p className={`text-[9px] font-black uppercase tracking-widest mb-0.5 ${billSummary.balance > 0 ? 'text-amber-400' : 'text-gray-400'}`}>Outstanding</p>
+                  <p className={`text-base font-black ${billSummary.balance > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500'}`}>${billSummary.balance.toLocaleString(undefined,{minimumFractionDigits:2})}</p>
+                </div>
+                <div className="bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-800/40 rounded-xl p-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400 mb-0.5">Med Aid Bal</p>
+                  <p className="text-base font-black text-indigo-700 dark:text-indigo-300">${billSummary.medicalAidBalance.toLocaleString(undefined,{minimumFractionDigits:2})}</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-900/20 border border-gray-100 dark:border-gray-700 rounded-xl p-3">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-0.5">Bills / Payments</p>
+                  <p className="text-base font-black text-gray-700 dark:text-gray-300">{patientBills.length} / {paymentHistory.length}</p>
+                </div>
+              </div>
+
+              {/* ── Toolbar ── */}
+              <div className="px-6 py-3 flex gap-3 items-center flex-shrink-0 border-b border-gray-100 dark:border-gray-700">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search invoice, method, notes..."
+                    value={historySearch}
+                    onChange={e => setHistorySearch(e.target.value)}
+                    className="w-full pl-9 pr-4 py-1.5 border border-gray-200 dark:border-gray-600 rounded-lg text-xs outline-none focus:ring-2 focus:ring-amber-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                </div>
+                <button
+                  onClick={() => handleExportHistory('excel', paymentHistory.filter(p => !historySearch || p.bill_number?.toLowerCase().includes(historySearch.toLowerCase()) || p.payment_method?.toLowerCase().includes(historySearch.toLowerCase())))}
                   disabled={paymentHistory.length === 0}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-green-100 transition border border-green-200 dark:border-green-800/50 disabled:opacity-40"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
                 </button>
-                <button 
-                  onClick={() => handleExportHistory('pdf', paymentHistory.filter(p => !historySearch || p.bill_number?.toLowerCase().includes(historySearch.toLowerCase()) || p.payment_method?.toLowerCase().includes(historySearch.toLowerCase()) || p.target_portion?.toLowerCase().includes(historySearch.toLowerCase())))} 
+                <button
+                  onClick={() => handleExportHistory('pdf', paymentHistory.filter(p => !historySearch || p.bill_number?.toLowerCase().includes(historySearch.toLowerCase()) || p.payment_method?.toLowerCase().includes(historySearch.toLowerCase())))}
                   disabled={paymentHistory.length === 0}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition border border-red-200 dark:border-red-800/50 disabled:opacity-40"
                 >
                   <FileText className="w-3.5 h-3.5" /> PDF
                 </button>
               </div>
-            </div>
 
-            {/* Payment List Table */}
-            <div className="flex-1 overflow-y-auto border border-gray-100 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-850">
-              {historyLoading ? (
-                <div className="py-20 flex flex-col items-center gap-3">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500" />
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Fetching records...</p>
-                </div>
-              ) : paymentHistory.length === 0 ? (
-                <div className="py-20 text-center flex flex-col items-center justify-center">
-                  <CreditCard className="w-10 h-10 text-gray-300 mb-2" />
-                  <p className="text-xs font-bold text-gray-400">No payment records found for this patient</p>
-                </div>
-              ) : (
-                <table className="w-full text-xs text-left border-collapse">
-                  <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0 border-b dark:border-gray-700">
-                    <tr className="text-[10px] font-black uppercase text-gray-400 tracking-wider">
-                      <th className="px-6 py-3">Invoice #</th>
-                      <th className="px-4 py-3">Payment Date</th>
-                      <th className="px-4 py-3">Method</th>
-                      <th className="px-4 py-3">Portion</th>
-                      <th className="px-6 py-3 text-right">Amount Paid</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y dark:divide-gray-700">
-                    {paymentHistory
-                      .filter(p => !historySearch || p.bill_number?.toLowerCase().includes(historySearch.toLowerCase()) || p.payment_method?.toLowerCase().includes(historySearch.toLowerCase()) || p.target_portion?.toLowerCase().includes(historySearch.toLowerCase()) || p.notes?.toLowerCase().includes(historySearch.toLowerCase()))
-                      .map(p => (
-                      <tr key={p.id} className="hover:bg-gray-100 dark:hover:bg-gray-950/20 transition">
-                        <td className="px-6 py-4 font-bold text-gray-700 dark:text-gray-300 font-mono">
-                          {p.bill_number ? `#${p.bill_number}` : '—'}
-                        </td>
-                        <td className="px-4 py-4 text-gray-500 dark:text-gray-400 font-medium">
-                          {new Date(p.payment_date).toLocaleDateString()}
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className="px-2.5 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded text-[9px] font-black uppercase tracking-wider">
-                            {p.payment_method?.replace(/_/g, ' ')}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className={`px-2.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${p.target_portion === 'medical_aid' ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950/20 dark:text-indigo-400' : 'bg-green-50 text-green-600 dark:bg-green-950/20 dark:text-green-400'}`}>
-                            {p.target_portion === 'medical_aid' ? 'Medical Aid' : 'Patient'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right font-black text-gray-950 dark:text-white text-sm">
-                          ${p.amount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                        </td>
+              {/* ── Statement Table ── */}
+              <div className="flex-1 overflow-y-auto">
+                {historyLoading ? (
+                  <div className="py-20 flex flex-col items-center gap-3">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500" />
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Loading statement...</p>
+                  </div>
+                ) : eventsWithRunning.length === 0 ? (
+                  <div className="py-20 text-center flex flex-col items-center justify-center gap-3">
+                    <CreditCard className="w-10 h-10 text-gray-200" />
+                    <p className="text-xs font-bold text-gray-400">No transactions found for this patient</p>
+                    <button
+                      onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); navigateToBills({ preselectedPatient: selectedPatientForHistory }); }}
+                      className="mt-2 flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase transition"
+                    >
+                      <FileText className="w-4 h-4" /> Create First Bill
+                    </button>
+                  </div>
+                ) : (
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0 z-10 border-b dark:border-gray-700">
+                      <tr className="text-[10px] font-black uppercase text-gray-500 tracking-wider">
+                        <th className="px-4 py-3 w-28">Date</th>
+                        <th className="px-4 py-3 w-32">Reference</th>
+                        <th className="px-4 py-3">Type / Details</th>
+                        <th className="px-4 py-3 text-right w-28">Debit (+)</th>
+                        <th className="px-4 py-3 text-right w-28">Credit (−)</th>
+                        <th className="px-4 py-3 text-right w-28">Balance</th>
+                        <th className="px-4 py-3 text-center w-24">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {eventsWithRunning.map((e, idx) => (
+                        e._type === 'bill' ? (
+                          // ── INVOICE ROW ──
+                          <tr key={`bill-${e.id}`} className="bg-blue-50/30 dark:bg-blue-950/10 hover:bg-blue-50/60 dark:hover:bg-blue-950/20 transition">
+                            <td className="px-4 py-3 text-gray-500 font-medium">{new Date(e.bill_date).toLocaleDateString()}</td>
+                            <td className="px-4 py-3 font-mono font-bold text-gray-800 dark:text-gray-200 text-[11px]">{e.bill_number}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <TrendingUp className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+                                <div>
+                                  <span className="font-bold text-blue-700 dark:text-blue-300">Invoice</span>
+                                  {(e.payment_method === 'medical_aid') && <span className="ml-2 px-1.5 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded text-[9px] font-black uppercase">Medical Aid</span>}
+                                  {(e.discount_amount || 0) > 0 && <span className="ml-1 text-amber-500 text-[10px] font-bold">-${(e.discount_amount||0).toLocaleString()} disc.</span>}
+                                </div>
+                                <span className={`ml-auto px-2 py-0.5 rounded-md text-[9px] font-black uppercase ${
+                                  e.status === 'paid' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' :
+                                  e.status === 'partially_paid' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400' :
+                                  'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'}`}>
+                                  {(e.status || 'unpaid').replace('_',' ')}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right font-black text-blue-700 dark:text-blue-300">${(e.total_amount||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                            <td className="px-4 py-3 text-right text-gray-300">—</td>
+                            <td className="px-4 py-3 text-right">
+                              <span className={`font-black ${
+                                e._running > 0 ? 'text-amber-600 dark:text-amber-400' :
+                                e._running < 0 ? 'text-violet-600 dark:text-violet-400' :
+                                'text-green-600 dark:text-green-400'
+                              }`}>
+                                {e._running < 0
+                                  ? `-$${Math.abs(e._running).toLocaleString(undefined,{minimumFractionDigits:2})}`
+                                  : `$${e._running.toLocaleString(undefined,{minimumFractionDigits:2})}`}
+                              </span>
+                              {e._running < 0 && <span className="ml-1 px-1 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 text-[8px] font-black uppercase rounded tracking-widest">CR</span>}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-center gap-1">
+                                {e.status !== 'paid' && (
+                                  <button
+                                    onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); navigateToBills({ preselectedPatient: selectedPatientForHistory, openPayment: true, preselectedBillId: e.id }); }}
+                                    title="Record Payment"
+                                    className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 transition"
+                                  >
+                                    <DollarSign className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          // ── PAYMENT ROW ──
+                          <tr key={`pmt-${e.id}`} className="bg-green-50/30 dark:bg-green-950/10 hover:bg-green-50/60 dark:hover:bg-green-950/20 transition">
+                            <td className="px-4 py-3 text-gray-500 font-medium">{new Date(e.payment_date).toLocaleDateString()}</td>
+                            <td className="px-4 py-3 font-mono font-bold text-gray-600 dark:text-gray-400 text-[11px]">{e.bill_number}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <TrendingDown className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                                <div>
+                                  <span className="font-bold text-green-700 dark:text-green-300">Payment</span>
+                                  <span className="ml-2 px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-[9px] font-black uppercase">{(e.payment_method||'cash').replace(/_/g,' ')}</span>
+                                  {e.target_portion === 'medical_aid' && <span className="ml-1 px-1.5 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 rounded text-[9px] font-black uppercase">Med Aid</span>}
+                                  {(e.discount_amount || 0) > 0 && <span className="ml-1 text-amber-500 text-[10px] font-bold">+${(e.discount_amount||0).toLocaleString()} disc.</span>}
+                                  {e.notes && <span className="ml-2 text-gray-400 italic text-[10px] truncate max-w-[150px]">{e.notes}</span>}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right text-gray-300">—</td>
+                            <td className="px-4 py-3 text-right font-black text-green-700 dark:text-green-300">${(e.amount||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                            <td className="px-4 py-3 text-right">
+                              <span className={`font-black ${
+                                e._running > 0 ? 'text-amber-600 dark:text-amber-400' :
+                                e._running < 0 ? 'text-violet-600 dark:text-violet-400' :
+                                'text-green-600 dark:text-green-400'
+                              }`}>
+                                {e._running < 0
+                                  ? `-$${Math.abs(e._running).toLocaleString(undefined,{minimumFractionDigits:2})}`
+                                  : `$${e._running.toLocaleString(undefined,{minimumFractionDigits:2})}`}
+                              </span>
+                              {e._running < 0 && <span className="ml-1 px-1 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 text-[8px] font-black uppercase rounded tracking-widest">CR</span>}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); navigateToBills({ viewReceiptPaymentId: e.id }); }}
+                                  title="View Receipt"
+                                  className="p-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 transition"
+                                >
+                                  <Receipt className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      ))}
+                    </tbody>
+                    {/* Totals footer */}
+                    <tfoot className="bg-gray-50 dark:bg-gray-900 border-t-2 border-gray-200 dark:border-gray-600 sticky bottom-0">
+                      <tr className="text-xs font-black">
+                        <td colSpan={3} className="px-4 py-3 uppercase tracking-widest text-gray-500">Totals</td>
+                        <td className="px-4 py-3 text-right text-blue-700 dark:text-blue-300">${billSummary.totalBilled.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                        <td className="px-4 py-3 text-right text-green-700 dark:text-green-300">${billSummary.totalPaid.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className={`${
+                            billSummary.balance > 0 ? 'text-amber-600 dark:text-amber-400' :
+                            billSummary.balance < 0 ? 'text-violet-600 dark:text-violet-400' :
+                            'text-green-600 dark:text-green-400'
+                          }`}>
+                            {billSummary.balance < 0
+                              ? `-$${Math.abs(billSummary.balance).toLocaleString(undefined,{minimumFractionDigits:2})}`
+                              : `$${billSummary.balance.toLocaleString(undefined,{minimumFractionDigits:2})}`}
+                          </span>
+                          {billSummary.balance < 0 && <span className="ml-1 px-1 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-300 text-[8px] font-black uppercase rounded tracking-widest">CR</span>}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
+              </div>
 
-            {/* Footer Buttons */}
-            <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700 flex justify-end">
-              <button 
-                onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); }} 
-                className="px-8 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-xl text-xs font-black uppercase hover:scale-105 active:scale-95 transition shadow-lg"
-              >
-                Close Ledger
-              </button>
+              {/* ── Footer ── */}
+              <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-700 flex justify-between items-center flex-shrink-0">
+                <p className="text-[10px] text-gray-400 font-medium">
+                  {eventsWithRunning.length} transaction{eventsWithRunning.length !== 1 ? 's' : ''} · Generated {new Date().toLocaleString()}
+                </p>
+                <button
+                  onClick={() => { setShowHistoryModal(false); setSelectedPatientForHistory(null); }}
+                  className="px-6 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-xl text-xs font-black uppercase hover:scale-105 active:scale-95 transition shadow-lg"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+
+
 
       {/* Patient Import Modal */}
       {showImportModal && (

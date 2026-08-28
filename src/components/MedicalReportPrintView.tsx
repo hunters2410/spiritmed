@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Printer, ArrowLeft, Download, Send, Edit3, Plus } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 interface Branch {
     name: string;
@@ -46,32 +47,34 @@ interface Props {
     onEdit: () => void;
     onAddNew: () => void;
     onSendEmail: () => void;
+    autoPrint?: boolean;
+    autoDownload?: boolean;
 }
 
-export function MedicalReportPrintView({ report, branch, onBack, onEdit, onAddNew, onSendEmail }: Props) {
+export function MedicalReportPrintView({
+    report, branch, onBack, onEdit, onAddNew, onSendEmail,
+    autoPrint = false, autoDownload = false
+}: Props) {
     const printRef = useRef<HTMLDivElement>(null);
-
-    // DEBUG – open browser console to see what signature_url contains
-    console.log('[MedicalReportPrintView] doctor:', report.doctor);
-    console.log('[MedicalReportPrintView] doctor.signature_url:', report.doctor?.signature_url);
-    console.log('[MedicalReportPrintView] branch.signature_url:', branch?.signature_url);
-
-    const sigSrc = report.doctor?.signature_url || branch?.signature_url || null;
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { 
-            scale: 2,
-            useCORS: true,
-            allowTaint: true
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`MEDICAL_REPORT_${report.patient.full_name}.pdf`);
+        await exportElementToPdf(printRef.current, `MEDICAL_REPORT_${report.patient.full_name}.pdf`);
     };
+
+    useEffect(() => {
+        if (autoPrint) {
+            const timer = setTimeout(() => { window.print(); }, 400);
+            return () => clearTimeout(timer);
+        }
+    }, [autoPrint]);
+
+    useEffect(() => {
+        if (autoDownload) {
+            const timer = setTimeout(() => { handleDownloadPdf(); }, 400);
+            return () => clearTimeout(timer);
+        }
+    }, [autoDownload]);
 
     const diagnosisLabel = (report.diagnosis && typeof report.diagnosis === 'object')
         ? `${report.diagnosis.name || ''}${report.diagnosis.icd10_code ? ` (${report.diagnosis.icd10_code})` : ''}`.trim()
@@ -101,9 +104,21 @@ export function MedicalReportPrintView({ report, branch, onBack, onEdit, onAddNe
                 </button>
             </div>
 
+            <style>{`
+                @media print {
+                    @page { size: A4 portrait; margin: 10mm; }
+                    body { background: #ffffff !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                }
+                .prose p { margin: 0 0 0.5em 0; }
+                .prose br { display: block; margin: 0.25em 0; content: ''; }
+                .prose strong, .prose b { font-weight: 700; }
+                .prose ul { list-style: disc; padding-left: 1.5em; margin: 0.5em 0; }
+                .prose ol { list-style: decimal; padding-left: 1.5em; margin: 0.5em 0; }
+                .prose li { margin: 0.25em 0; }
+            `}</style>
             {/* Document View */}
-            <div className="flex-1 max-w-[210mm] order-1 md:order-2">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
+            <div className="flex-1 w-full overflow-x-auto order-1 md:order-2 flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
                     {/* Header */}
                     <div className="flex justify-between items-start border-b pb-6 mb-6">
                         <div>
@@ -161,9 +176,10 @@ export function MedicalReportPrintView({ report, branch, onBack, onEdit, onAddNe
 
                         <section>
                             <h3 className="font-bold text-gray-900 uppercase mb-3">Clinical Findings & Detailed Report:</h3>
-                            <div className="text-gray-700 whitespace-pre-wrap min-h-[140mm] text-justify leading-relaxed">
-                                {report.content}
-                            </div>
+                            <div
+                                className="text-gray-700 min-h-[140mm] text-justify leading-relaxed prose prose-sm max-w-none"
+                                dangerouslySetInnerHTML={{ __html: report.content }}
+                            />
                         </section>
                     </div>
 

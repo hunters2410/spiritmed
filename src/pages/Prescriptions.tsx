@@ -1,17 +1,34 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAllPatients } from '../utils/patientUtils';
 import {
     Plus, Search, Pill, Pencil, Trash2, X, ChevronDown, ChevronLeft,
-    ChevronRight, Activity, Eye, Printer, UserPlus, ClipboardList
+    ChevronRight, Activity, Eye, Printer, UserPlus, ClipboardList, Download
 } from 'lucide-react';
 import { PrescriptionPrintView } from '../components/PrescriptionPrintView';
+import { RichTextEditor } from '../components/RichTextEditor';
 import { logActivity } from '../utils/auditLogger';
 
 /* ─── types ─── */
 interface Patient { id: string; full_name: string; patient_number: string; }
 interface Doctor { id: string; full_name: string; }
-interface Medicine { id: string; name: string; dosage: string; }
+interface Medicine {
+    id: string;
+    name: string;
+    dosage?: string;
+    route?: string;
+    frequency?: { name: string } | string;
+}
+
+const formatMedicineLabel = (m: Medicine) => {
+    if (!m) return '';
+    const name = m.name || '-';
+    const dosage = m.dosage || '-';
+    const route = m.route || '-';
+    const freq = (typeof m.frequency === 'object' ? m.frequency?.name : m.frequency) || '-';
+    return `Name : ${name} | Dosage : ${dosage} | Route : ${route} | Frequency : ${freq}`;
+};
 interface Frequency { id: string; name: string; }
 interface PrescriptionItem {
     id?: string;
@@ -30,15 +47,33 @@ interface Prescription {
     notes: string;
     patient_id: string;
     doctor_id: string;
-    patient?: { full_name: string; patient_number: string };
-    doctor?: { full_name: string };
-    prescription_items?: { id: string; medicine?: { name: string; dosage: string }; period: string; time_unit: string; advice: string }[];
+    patient?: { full_name: string; patient_number: string; gender?: string; date_of_birth?: string };
+    doctor?: { full_name: string; specialization?: string; qualifications?: string; signature_url?: string };
+    prescription_items?: {
+        id: string;
+        medicine_id?: string;
+        medicine?: {
+            id?: string;
+            name: string;
+            dosage?: string;
+            route?: string;
+            frequency?: { name: string } | string;
+        };
+        period: string;
+        time_unit: string;
+        advice: string;
+    }[];
 }
 
 const inputCls = "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm";
 const labelCls = "block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1";
 
 const TIME_UNITS = ['Days', 'Weeks', 'Months', 'Years'];
+
+const renderHtmlOrText = (text?: string) => {
+    if (!text) return '—';
+    return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content inline-block text-xs text-gray-700 dark:text-gray-300" />;
+};
 
 /* ─── Generic SearchDropdown ─── */
 function SearchDropdown({ label, placeholder, items, selectedId, onSelect, onAddNew, displayFn }: any) {
@@ -116,7 +151,7 @@ function QuickAddPatient({ onClose, onSave, branchId }: any) {
         setSaving(true);
         setError(null);
         // Auto-generate a unique patient number so the user doesn't need to provide one
-        const patient_number = `P${Date.now().toString().slice(-6)}`;
+        const patient_number = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
         // Auto-generate an email if not provided
         const email = form.email.trim() ||
             `${form.full_name.toLowerCase().replace(/\s+/g, '.')}${Date.now().toString().slice(-4)}@patient.local`;
@@ -168,7 +203,7 @@ function QuickAddMedicine({ onClose, onSave, branchId, frequencies }: any) {
         e.preventDefault();
         setSaving(true);
         setError(null);
-        const { data, error } = await supabase.from('medicines').insert([{ ...form, branch_id: branchId, frequency_id: form.frequency_id || null }]).select().single();
+        const { data, error } = await supabase.from('medicines').insert([{ ...form, branch_id: branchId, frequency_id: form.frequency_id || null }]).select('*, frequency:medicine_frequencies(name)').single();
         if (error) { if (error.code === '23505') setError('Medicine already exists.'); else setError(error.message); setSaving(false); return; }
         onSave(data);
     }
@@ -208,7 +243,7 @@ const emptyItem = (): PrescriptionItem => ({ medicine_id: '', period: '', time_u
 
 /* ─── Main Page ─── */
 export function Prescriptions() {
-    const { profile } = useAuth();
+    const { profile, hasPermission } = useAuth();
 
     const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
     const [patients, setPatients] = useState<Patient[]>([]);
@@ -240,9 +275,25 @@ export function Prescriptions() {
     /* pagination & search */
     const [search, setSearch] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
-    const [itemsPerPage, setItemsPerPage] = useState(10);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
     const [branch, setBranch] = useState<any>(null);
+    const [autoPrint, setAutoPrint] = useState(false);
+    const [autoDownload, setAutoDownload] = useState(false);
+
+    const handlePrintRx = (rx: Prescription) => {
+        setShowViewModal(rx);
+        setAutoPrint(true);
+        setAutoDownload(false);
+        setViewMode('detailed');
+    };
+
+    const handleDownloadPdfRx = (rx: Prescription) => {
+        setShowViewModal(rx);
+        setAutoDownload(true);
+        setAutoPrint(false);
+        setViewMode('detailed');
+    };
 
     const resetForm = () => {
         setForm({
@@ -272,25 +323,47 @@ export function Prescriptions() {
         const isSuperAdmin = profile.role === 'super_admin';
         const branchId = profile.branch_id;
 
-        const rxQuery = supabase.from('prescriptions')
-            .select('*, patient:patients(full_name,patient_number), doctor:users(full_name, specialization, qualifications, signature_url), prescription_items(id, period, time_unit, advice, medicine:medicines(name,dosage))')
-            .order('created_at', { ascending: false });
-        const patQuery = supabase.from('patients').select('id, full_name, patient_number').eq('status', 'active').order('full_name');
+        let allRxs: any[] = [];
+        let fromRx = 0;
+        const pageSizeRx = 1000;
+        while (true) {
+            let rxQuery = supabase.from('prescriptions')
+                .select('*, patient:patients(full_name,patient_number,gender,date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), prescription_items(id, medicine_id, period, time_unit, advice, medicine:medicines(id, name, dosage, route, frequency:medicine_frequencies(name)))')
+                .order('created_at', { ascending: false })
+                .range(fromRx, fromRx + pageSizeRx - 1);
+
+            if (!isSuperAdmin && branchId) {
+                rxQuery = rxQuery.eq('branch_id', branchId);
+            }
+            const { data, error } = await rxQuery;
+            if (error) break;
+            if (!data || data.length === 0) break;
+            allRxs = allRxs.concat(data);
+            if (data.length < pageSizeRx) break;
+            fromRx += pageSizeRx;
+        }
+
         const docQuery = supabase.from('users').select('id, full_name').eq('role', 'doctor').eq('is_active', true).order('full_name');
-        const medQuery = supabase.from('medicines').select('id, name, dosage').order('name');
+        const medQuery = supabase.from('medicines').select('id, name, dosage, route, frequency:medicine_frequencies(name)').order('name');
         const freqQuery = supabase.from('medicine_frequencies').select('id, name').order('name');
 
+        const activeBranchId = !isSuperAdmin && branchId ? branchId : undefined;
+
         if (!isSuperAdmin && branchId) {
-            rxQuery.eq('branch_id', branchId);
-            patQuery.eq('branch_id', branchId);
             docQuery.eq('branch_id', branchId);
             medQuery.eq('branch_id', branchId);
             freqQuery.or(`branch_id.eq.${branchId},branch_id.is.null`);
         }
 
-        const [rxRes, patRes, docRes, medRes, freqRes] = await Promise.all([rxQuery, patQuery, docQuery, medQuery, freqQuery]);
-        if (!rxRes.error) setPrescriptions((rxRes.data as any[]) || []);
-        if (!patRes.error) setPatients(patRes.data || []);
+        const [allPats, docRes, medRes, freqRes] = await Promise.all([
+            fetchAllPatients({ branchId: activeBranchId, select: 'id, full_name, patient_number', activeOnly: true }),
+            docQuery,
+            medQuery,
+            freqQuery
+        ]);
+
+        setPrescriptions(allRxs || []);
+        setPatients(allPats || []);
         if (!docRes.error) setDoctors(docRes.data || []);
         if (!medRes.error) setMedicines(medRes.data || []);
         if (!freqRes.error) setFrequencies(freqRes.data || []);
@@ -405,10 +478,10 @@ export function Prescriptions() {
 
     /* filtered + paginated */
     const filtered = prescriptions.filter(rx =>
-        rx.patient?.full_name.toLowerCase().includes(search.toLowerCase()) ||
-        rx.doctor?.full_name.toLowerCase().includes(search.toLowerCase()) ||
-        rx.prescription_number?.toLowerCase().includes(search.toLowerCase()) ||
-        rx.prescription_date?.includes(search)
+        (rx.patient?.full_name || '').toLowerCase().includes(search.toLowerCase()) ||
+        (rx.doctor?.full_name || '').toLowerCase().includes(search.toLowerCase()) ||
+        (rx.prescription_number || '').toLowerCase().includes(search.toLowerCase()) ||
+        (rx.prescription_date || '').includes(search)
     );
     const totalPages = Math.ceil(filtered.length / itemsPerPage);
     const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -423,24 +496,33 @@ export function Prescriptions() {
                     created_at: showViewModal.prescription_date,
                     patient: showViewModal.patient as any,
                     doctor: showViewModal.doctor as any,
-                    items: (showViewModal.prescription_items || []).map(i => ({
-                        id: i.id,
-                        medicine_name: i.medicine?.name || 'Unknown Medicine',
-                        dosage: i.medicine?.dosage || '',
-                        frequency: '',
-                        duration: `${i.period} ${i.time_unit}`,
-                        instructions: i.advice
-                    }))
+                    items: (showViewModal.prescription_items || []).map(i => {
+                        const freq = (typeof i.medicine?.frequency === 'object' ? i.medicine?.frequency?.name : i.medicine?.frequency) || '';
+                        return {
+                            id: i.id,
+                            medicine_name: i.medicine?.name || 'Unknown Medicine',
+                            dosage: i.medicine?.dosage || '',
+                            route: i.medicine?.route || '',
+                            frequency: freq,
+                            duration: `${i.period} ${i.time_unit}`,
+                            instructions: i.advice
+                        };
+                    })
                 }}
                 branch={branch}
-                onBack={() => setViewMode('table')}
+                autoPrint={autoPrint}
+                autoDownload={autoDownload}
+                onBack={() => {
+                    setAutoPrint(false);
+                    setAutoDownload(false);
+                    setViewMode('table');
+                }}
                 onEdit={() => {
                     openEdit(showViewModal);
                     setViewMode('table');
                 }}
                 onAddNew={() => {
-                    resetForm();
-                    setShowModal(true);
+                    openAdd();
                     setViewMode('table');
                 }}
                 onSendEmail={() => alert('Email functionality coming soon')}
@@ -458,10 +540,12 @@ export function Prescriptions() {
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400 mt-1">Issue and manage patient prescriptions</p>
                 </div>
-                <button onClick={openAdd}
-                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-md font-semibold">
-                    <Plus className="w-5 h-5" /> Add Prescription
-                </button>
+                {hasPermission('prescriptions', 'add') && (
+                    <button onClick={openAdd}
+                        className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-md font-semibold">
+                        <Plus className="w-5 h-5" /> Add Prescription
+                    </button>
+                )}
             </div>
 
             {/* Search */}
@@ -514,19 +598,31 @@ export function Prescriptions() {
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 border border-gray-200 dark:border-gray-700">
-                                        <div className="flex justify-center gap-2">
-                                            <button title="View" onClick={() => { setShowViewModal(rx); setViewMode('detailed'); }}
+                                        <div className="flex justify-center gap-1.5">
+                                            <button title="View" onClick={() => { setShowViewModal(rx); setAutoPrint(false); setAutoDownload(false); setViewMode('detailed'); }}
                                                 className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition">
                                                 <Eye className="w-4 h-4" />
                                             </button>
-                                            <button title="Edit" onClick={() => openEdit(rx)}
-                                                className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition">
-                                                <Pencil className="w-4 h-4" />
+                                            {hasPermission('prescriptions', 'edit') && (
+                                                <button title="Edit" onClick={() => openEdit(rx)}
+                                                    className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition">
+                                                    <Pencil className="w-4 h-4" />
+                                                </button>
+                                            )}
+                                            <button title="Print Prescription" onClick={() => handlePrintRx(rx)}
+                                                className="p-1.5 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition">
+                                                <Printer className="w-4 h-4" />
                                             </button>
-                                            <button title="Delete" onClick={() => handleDelete(rx.id)}
-                                                className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition">
-                                                <Trash2 className="w-4 h-4" />
+                                            <button title="Download PDF" onClick={() => handleDownloadPdfRx(rx)}
+                                                className="p-1.5 text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition">
+                                                <Download className="w-4 h-4" />
                                             </button>
+                                            {hasPermission('prescriptions', 'delete') && (
+                                                <button title="Delete" onClick={() => handleDelete(rx.id)}
+                                                    className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition">
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>
@@ -676,8 +772,33 @@ export function Prescriptions() {
                                             selectedId={item.medicine_id}
                                             onSelect={(id: string) => updateItem(idx, 'medicine_id', id)}
                                             onAddNew={() => { setAddMedForIdx(idx); setShowAddMedicine(true); }}
-                                            displayFn={(m: Medicine) => m.dosage ? `${m.name} — ${m.dosage}` : m.name}
+                                            displayFn={formatMedicineLabel}
                                         />
+
+                                        {(() => {
+                                            const selectedMed = medicines.find(m => m.id === item.medicine_id);
+                                            if (!selectedMed) return null;
+                                            const freq = (typeof selectedMed.frequency === 'object' ? selectedMed.frequency?.name : selectedMed.frequency) || '';
+                                            return (
+                                                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs bg-blue-50/80 dark:bg-blue-900/30 p-2 rounded-lg border border-blue-200 dark:border-blue-800">
+                                                    {selectedMed.dosage && (
+                                                        <span className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded text-blue-700 dark:text-blue-300 font-semibold border border-blue-100 dark:border-blue-700">
+                                                            Dosage: {selectedMed.dosage}
+                                                        </span>
+                                                    )}
+                                                    {selectedMed.route && (
+                                                        <span className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded text-indigo-700 dark:text-indigo-300 font-semibold border border-indigo-100 dark:border-indigo-700">
+                                                            Route: {selectedMed.route}
+                                                        </span>
+                                                    )}
+                                                    {freq && (
+                                                        <span className="px-2 py-0.5 bg-white dark:bg-gray-800 rounded text-purple-700 dark:text-purple-300 font-semibold border border-purple-100 dark:border-purple-700">
+                                                            Frequency: {freq}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
 
                                         {/* Period + Time Unit */}
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
@@ -700,10 +821,12 @@ export function Prescriptions() {
                                         {/* Advice */}
                                         <div className="mt-3">
                                             <label className={labelCls}>Advice</label>
-                                            <textarea value={item.advice}
-                                                onChange={e => updateItem(idx, 'advice', e.target.value)}
-                                                className={`${inputCls} h-16 resize-none`}
-                                                placeholder="e.g. Take with food, twice daily after meals" />
+                                            <RichTextEditor
+                                                value={item.advice}
+                                                onChange={val => updateItem(idx, 'advice', val)}
+                                                placeholder="e.g. Take with food, twice daily after meals"
+                                                minHeight="80px"
+                                            />
                                         </div>
                                     </div>
                                 ))}
@@ -717,10 +840,12 @@ export function Prescriptions() {
                             {/* Notes */}
                             <div>
                                 <label className={labelCls}>General Notes</label>
-                                <textarea value={form.notes}
-                                    onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                                    className={`${inputCls} h-20 resize-none`}
-                                    placeholder="Optional notes..." />
+                                <RichTextEditor
+                                    value={form.notes}
+                                    onChange={val => setForm(f => ({ ...f, notes: val }))}
+                                    placeholder="Optional notes..."
+                                    minHeight="100px"
+                                />
                             </div>
 
                             <div className="flex gap-3 pt-2">
@@ -765,33 +890,50 @@ export function Prescriptions() {
                                 </div>
                                 <div>
                                     <span className="text-xs font-bold text-gray-400 uppercase">Patient</span>
-                                    <p className="font-semibold text-gray-900 dark:text-white mt-0.5">{showViewModal.patient?.full_name} <span className="text-gray-400 font-normal text-xs">({showViewModal.patient?.patient_number})</span></p>
+                                    <p className="font-semibold text-gray-900 dark:text-white mt-0.5">{showViewModal.patient?.full_name || 'N/A'} {showViewModal.patient?.patient_number ? <span className="text-gray-400 font-normal text-xs">({showViewModal.patient.patient_number})</span> : null}</p>
                                 </div>
                                 <div>
                                     <span className="text-xs font-bold text-gray-400 uppercase">Doctor</span>
-                                    <p className="font-semibold text-gray-900 dark:text-white mt-0.5">{showViewModal.doctor?.full_name}</p>
+                                    <p className="font-semibold text-gray-900 dark:text-white mt-0.5">{showViewModal.doctor?.full_name || 'Dr. S.C. Meki'}</p>
                                 </div>
                             </div>
 
                             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
                                 <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Medicines</h4>
                                 <div className="space-y-3">
-                                    {(showViewModal.prescription_items || []).map((item) => (
-                                        <div key={item.id} className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800/30">
-                                            <div className="flex items-center justify-between">
-                                                <p className="font-bold text-gray-900 dark:text-white text-sm">{item.medicine?.name} {item.medicine?.dosage && <span className="text-gray-400 font-normal">— {item.medicine.dosage}</span>}</p>
-                                                <span className="text-xs text-blue-600 dark:text-blue-400 font-bold bg-blue-100 dark:bg-blue-900/40 px-2 py-0.5 rounded-full">{item.period} {item.time_unit}</span>
+                                    {(showViewModal.prescription_items || []).map((item) => {
+                                        const freq = (typeof item.medicine?.frequency === 'object' ? item.medicine?.frequency?.name : item.medicine?.frequency) || '';
+                                        return (
+                                            <div key={item.id} className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800/30">
+                                                <div className="flex items-center justify-between">
+                                                    <p className="font-bold text-gray-900 dark:text-white text-sm">{item.medicine?.name} {item.medicine?.dosage && <span className="text-gray-400 font-normal">— {item.medicine.dosage}</span>}</p>
+                                                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold bg-blue-100 dark:bg-blue-900/40 px-2 py-0.5 rounded-full">{item.period} {item.time_unit}</span>
+                                                </div>
+                                                {(item.medicine?.route || freq) && (
+                                                    <div className="flex flex-wrap gap-2 text-xs mt-1.5 font-medium text-gray-600 dark:text-gray-400">
+                                                        {item.medicine?.route && (
+                                                            <span className="bg-white dark:bg-gray-800 px-2 py-0.5 rounded border border-gray-200 dark:border-gray-700">
+                                                                Route: <b className="text-gray-800 dark:text-gray-200">{item.medicine.route}</b>
+                                                            </span>
+                                                        )}
+                                                        {freq && (
+                                                            <span className="bg-white dark:bg-gray-800 px-2 py-0.5 rounded border border-gray-200 dark:border-gray-700">
+                                                                Frequency: <b className="text-gray-800 dark:text-gray-200">{freq}</b>
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {item.advice && <div className="text-xs text-gray-500 mt-1.5">{renderHtmlOrText(item.advice)}</div>}
                                             </div>
-                                            {item.advice && <p className="text-xs text-gray-500 mt-1">{item.advice}</p>}
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </div>
 
                             {showViewModal.notes && (
                                 <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
                                     <span className="text-xs font-bold text-gray-400 uppercase">Notes</span>
-                                    <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{showViewModal.notes}</p>
+                                    <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">{renderHtmlOrText(showViewModal.notes)}</div>
                                 </div>
                             )}
                         </div>

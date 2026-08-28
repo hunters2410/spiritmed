@@ -1,6 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+
+// ── Module-level cache for file number pool (5 min TTL) ────────────────────
+const _fnCache: { data: any[] | null; ts: number; branchId: string | null } = {
+  data: null, ts: 0, branchId: null,
+};
+const FN_CACHE_TTL = 5 * 60 * 1000;
+function isFnCacheValid(branchId: string | null) {
+  return _fnCache.data !== null
+    && _fnCache.branchId === branchId
+    && Date.now() - _fnCache.ts < FN_CACHE_TTL;
+}
+// ────────────────────────────────────────────────────────────────────────────
 import { 
   FileText, Plus, Trash2, Search, 
   CheckCircle, XCircle, AlertCircle, Loader2,
@@ -25,7 +37,16 @@ export function FileNumberPool() {
     }
   }, [profile]);
 
-  const loadFileNumbers = async () => {
+  const loadFileNumbers = useCallback(async (force = false) => {
+    const branchId = profile?.branch_id ?? null;
+
+    // Serve from cache unless forced or stale
+    if (!force && isFnCacheValid(branchId)) {
+      setFileNumbers(_fnCache.data!);
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
 
@@ -89,10 +110,10 @@ export function FileNumberPool() {
           id: p.id,
           file_number: cleanFn,
           is_occupied: isOccupied,
-          origin: p.status === 'discharged' ? 'discharged' : p.status === 'deceased' ? 'deceased' : 'active_patient',
+          origin: p.status === 'discharged' ? 'discharged' : p.status === 'deceased' ? 'deceased' : p.status === 'old_patient' ? 'old_patient' : 'active_patient',
           patient_status: p.status,
           patient_name: p.full_name,
-          patient_number: p.patient_number ? p.patient_number.split('-')[0] : '',
+          patient_number: p.patient_number ? p.patient_number : '',
           created_at: p.created_at
         });
       });
@@ -106,13 +127,17 @@ export function FileNumberPool() {
         return a.is_occupied ? 1 : -1;
       });
 
+      // Store in cache
+      _fnCache.data = combinedList;
+      _fnCache.ts = Date.now();
+      _fnCache.branchId = branchId;
       setFileNumbers(combinedList);
     } catch (error) {
       console.error('Error loading file numbers:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [profile]);
 
   const handleAddFileNumber = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -198,7 +223,7 @@ export function FileNumberPool() {
     const matchesFilter = 
       filter === 'all' ? true :
       filter === 'available' ? !f.is_occupied : 
-      filter === 'discharged_deceased' ? (f.patient_status === 'discharged' || f.patient_status === 'deceased') :
+      filter === 'discharged_deceased' ? (f.patient_status === 'discharged' || f.patient_status === 'deceased' || f.patient_status === 'old_patient') :
       f.is_occupied;
 
     return matchesSearch && matchesFilter;
@@ -208,7 +233,7 @@ export function FileNumberPool() {
   const paginatedNumbers = filteredNumbers.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
   const availableCount = fileNumbers.filter(f => !f.is_occupied).length;
-  const dischargedDeceasedCount = fileNumbers.filter(f => f.patient_status === 'discharged' || f.patient_status === 'deceased').length;
+  const dischargedDeceasedCount = fileNumbers.filter(f => f.patient_status === 'discharged' || f.patient_status === 'deceased' || f.patient_status === 'old_patient').length;
   const occupiedCount = fileNumbers.filter(f => f.is_occupied).length;
 
   return (
@@ -219,10 +244,10 @@ export function FileNumberPool() {
             <FileText className="w-8 h-8 text-green-600" />
             File Number Pool
           </h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Manage manual file numbers and track unallocated numbers from discharged & deceased patients.</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">Manage manual file numbers and track unallocated numbers from discharged, deceased & old patients.</p>
         </div>
         <button 
-          onClick={loadFileNumbers} 
+          onClick={() => loadFileNumbers(true)} 
           className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-lg text-xs font-bold transition self-start md:self-auto"
         >
           <RefreshCw className="w-4 h-4" />
@@ -348,8 +373,12 @@ export function FileNumberPool() {
                       <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
                         Unallocated (Deceased)
                       </span>
+                    ) : file.patient_status === 'old_patient' || file.patient_status === 'old' ? (
+                      <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                        Unallocated (Old Patient)
+                      </span>
                     ) : file.is_occupied ? (
-                      <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                      <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
                         Occupied (Active)
                       </span>
                     ) : (
@@ -419,6 +448,11 @@ export function FileNumberPool() {
                         <span className="inline-flex items-center gap-1.5 py-1 px-3 rounded-full text-xs font-black bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300 border border-purple-300 dark:border-purple-700">
                           <UserX className="w-3.5 h-3.5 text-purple-600" />
                           UNALLOCATED (DECEASED)
+                        </span>
+                      ) : file.patient_status === 'old_patient' || file.patient_status === 'old' ? (
+                        <span className="inline-flex items-center gap-1.5 py-1 px-3 rounded-full text-xs font-black bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+                          <UserX className="w-3.5 h-3.5 text-amber-600" />
+                          UNALLOCATED (OLD PATIENT)
                         </span>
                       ) : file.is_occupied ? (
                         <span className="inline-flex items-center gap-1.5 py-1 px-3 rounded-full text-xs font-black bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700">

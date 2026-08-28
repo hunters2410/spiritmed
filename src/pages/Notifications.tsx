@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { 
   Bell, Search, Check, Trash2, 
   ExternalLink, Info, CheckCircle, AlertTriangle, 
-  XCircle, Calendar, Inbox
+  XCircle, Calendar, Inbox, MessageSquare
 } from 'lucide-react';
 import { useNotifications } from '../contexts/NotificationContext';
 
@@ -51,6 +51,7 @@ export function Notifications() {
 
   const getIcon = (type: string = 'info') => {
     switch (type) {
+      case 'chat_message': return <MessageSquare className="w-5 h-5 text-indigo-500" />;
       case 'success': return <CheckCircle className="w-5 h-5 text-emerald-500" />;
       case 'warning': return <AlertTriangle className="w-5 h-5 text-amber-500" />;
       case 'error': return <XCircle className="w-5 h-5 text-rose-500" />;

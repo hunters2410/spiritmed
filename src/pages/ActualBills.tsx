@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Search, Receipt, FileText, Trash2, X, DollarSign, ChevronLeft, ChevronRight, Calendar, Filter, FileSpreadsheet, FileJson, Pencil, Tag } from 'lucide-react';
+import { fetchAllPatients } from '../utils/patientUtils';
+import { Plus, Search, Receipt, FileText, Trash2, X, DollarSign, ChevronLeft, ChevronRight, Calendar, Filter, FileSpreadsheet, FileJson, Pencil, Tag, CheckCircle, Banknote } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 import { emailService } from '../utils/emailService';
@@ -14,6 +15,7 @@ import { ApprovalGate, RequestEditModal } from '../components/ApprovalGate';
 import { approvalService, EditApprovalRequest } from '../utils/approvalService';
 import { Printer as PrintIcon } from 'lucide-react';
 import { accountingSync } from '../utils/accountingSync';
+import { autoAllocateCredits } from '../utils/creditAllocation';
 
 
 interface BillItem {
@@ -47,6 +49,7 @@ interface Bill {
     patient: {
         full_name: string;
         patient_number: string;
+        file_number?: string;
         email?: string;
         phone?: string;
         total_cumulative_balance?: number;
@@ -71,8 +74,13 @@ export function ActualBills() {
     const [editingBillId, setEditingBillId] = useState<string | null>(null);
     const [showPrintView, setShowPrintView] = useState(false);
     const [selectedBillForPrint, setSelectedBillForPrint] = useState<Bill | null>(null);
+    const [invoiceIdFromUrl, setInvoiceIdFromUrl] = useState<string | null>(null);
     const [branch, setBranch] = useState<any>(null);
     const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const hasLoadedOnce = useRef(false);
+    const [totalBillDbCount, setTotalBillDbCount] = useState(0);
     const [filterStatus, setFilterStatus] = useState('all');
     const [filterDueType, setFilterDueType] = useState('all');
     const [filterDebtors, setFilterDebtors] = useState(false);
@@ -94,6 +102,11 @@ export function ActualBills() {
         notes: ''
     });
 
+    // Post-bill-creation success modal state
+    const [showBillSuccessModal, setShowBillSuccessModal] = useState(false);
+    const [lastCreatedBill, setLastCreatedBill] = useState<any>(null);
+    const [lastCreatedPatientName, setLastCreatedPatientName] = useState('');
+
     // Approval gate state (accountant edit flow)
     const [pendingEditBill, setPendingEditBill] = useState<Bill | null>(null);
     const [showBillRequestModal, setShowBillRequestModal] = useState(false);
@@ -114,8 +127,19 @@ export function ActualBills() {
         notes: ''
     });
 
+    // Debounce search input
+    const handleSearchChange = useCallback((value: string) => {
+        setSearchQuery(value);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = setTimeout(() => {
+            setDebouncedSearch(value);
+            setCurrentPage(1);
+        }, 300);
+    }, []);
+
+    // Initial reference data load
     useEffect(() => {
-        loadBills();
+        if (!profile) return;
         loadPatients();
         loadProcedures();
         loadMedicalAids();
@@ -142,7 +166,18 @@ export function ActualBills() {
         if (dueTypeParam) {
             setFilterDueType(dueTypeParam);
         }
+
+        // Check if URL is /bills/invoice/{id} — restore invoice print view on refresh
+        const pathParts = window.location.pathname.split('/');
+        if (pathParts[1] === 'bills' && pathParts[2] === 'invoice' && pathParts[3]) {
+            setInvoiceIdFromUrl(pathParts[3]);
+        }
     }, [profile]);
+
+    // Re-fetch when page, search, or filters change
+    useEffect(() => {
+        if (profile) loadBills();
+    }, [currentPage, debouncedSearch, filterStatus, filterDueType, filterDebtors, startDate, endDate, filterMedicalAid, itemsPerPage, profile]);
 
     const loadBranch = async () => {
         if (!profile?.branch_id) return;
@@ -174,50 +209,105 @@ export function ActualBills() {
         setCurrentPage(1);
     };
 
-    const filteredBills = bills.filter(inv => {
-        const matchesSearch = (inv.patient?.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (inv.bill_number || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (inv.patient?.patient_number || '').toLowerCase().includes(searchQuery.toLowerCase());
-        
-        const matchesStatus = filterStatus === 'all' || 
-            (filterStatus === 'unpaid' ? (inv.status === 'unpaid' || inv.status === 'partially_paid') : inv.status === filterStatus);
-        const matchesDebtor = !filterDebtors || (inv.patient?.total_cumulative_balance || 0) > 0;
-        const matchesMedicalAid = filterMedicalAid === 'all' || inv.medical_aid_id === filterMedicalAid;
-        const matchesDueType = filterDueType === 'all' ||
-            (filterDueType === 'medical_aid' ? (inv.medical_aid_balance || 0) > 0 :
-             filterDueType === 'shortfall' ? (inv.shortfall_balance || 0) > 0 : true);
-        
-        const invDate = new Date(inv.bill_date);
-        const matchesStartDate = !startDate || invDate >= new Date(startDate);
-        const matchesEndDate = !endDate || invDate <= new Date(endDate);
+    // Bills are now server-paginated — filteredBills is the current page of data
+    // Apply client-side secondary filters that can't easily be done server-side
+    const filteredBills = useMemo(() => {
+        let result = bills;
+        if (debouncedSearch.trim()) {
+            const q = debouncedSearch.toLowerCase();
+            result = result.filter(inv =>
+                (inv.patient?.full_name || '').toLowerCase().includes(q) ||
+                (inv.bill_number || '').toLowerCase().includes(q) ||
+                (inv.patient?.patient_number || '').toLowerCase().includes(q) ||
+                (inv.patient?.file_number || '').toLowerCase().includes(q)
+            );
+        }
+        if (filterDebtors) {
+            result = result.filter(inv => (inv.patient?.total_cumulative_balance || 0) > 0);
+        }
+        if (filterDueType !== 'all') {
+            result = result.filter(inv =>
+                filterDueType === 'medical_aid' ? (inv.medical_aid_balance || 0) > 0 :
+                filterDueType === 'shortfall' ? (inv.shortfall_balance || 0) > 0 : true
+            );
+        }
+        return result;
+    }, [bills, debouncedSearch, filterDebtors, filterDueType]);
 
-        return matchesSearch && matchesStatus && matchesDebtor && matchesMedicalAid && matchesDueType && matchesStartDate && matchesEndDate;
-    });
+    const totalBillsAmount = useMemo(() => filteredBills.reduce((sum, inv) => sum + (inv.total_amount || 0), 0), [filteredBills]);
+    const totalPaidAmount = useMemo(() => filteredBills.reduce((sum, inv) => sum + (inv.paid_amount || 0), 0), [filteredBills]);
+    const totalBalanceAmount = useMemo(() => filteredBills.reduce((sum, inv) => sum + (inv.balance || 0), 0), [filteredBills]);
+    const totalShortfallBalance = useMemo(() => filteredBills.reduce((sum, inv) => sum + (inv.shortfall_balance || 0), 0), [filteredBills]);
+    const totalMedicalAidBalance = useMemo(() => filteredBills.reduce((sum, inv) => sum + (inv.medical_aid_balance || 0), 0), [filteredBills]);
 
-    const totalBillsAmount = filteredBills.reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-    const totalPaidAmount = filteredBills.reduce((sum, inv) => sum + (inv.paid_amount || 0), 0);
-    const totalBalanceAmount = filteredBills.reduce((sum, inv) => sum + (inv.balance || 0), 0);
-    const totalShortfallBalance = filteredBills.reduce((sum, inv) => sum + (inv.shortfall_balance || 0), 0);
-    const totalMedicalAidBalance = filteredBills.reduce((sum, inv) => sum + (inv.medical_aid_balance || 0), 0);
-
-    const totalPages = Math.ceil(filteredBills.length / itemsPerPage);
+    const totalPages = Math.ceil(totalBillDbCount / itemsPerPage);
 
     const loadBills = async () => {
+        if (!profile) return;
+        if (!hasLoadedOnce.current) { setLoading(true); }
+
         try {
+            const from = (currentPage - 1) * itemsPerPage;
+            const to = from + itemsPerPage - 1;
+
             let query = supabase
                 .from('bills')
                 .select(`
-          *,
-          patient:patients(full_name, patient_number, email, phone, outstanding_balance, medical_aid:medical_aids(name)),
-          bill_items(*)
-        `)
-                .order('created_at', { ascending: false });
+                  id, patient_id, branch_id, bill_number, bill_date, total_amount, discount_amount,
+                  medical_aid_amount, shortfall_amount, paid_amount, shortfall_balance, medical_aid_balance,
+                  balance, subtotal, tax_amount, status, due_date, created_at, payment_method, medical_aid_id, notes,
+                  patient:patients(full_name, patient_number, file_number, email, phone, outstanding_balance, medical_aid:medical_aids(name)),
+                  bill_items!bill_items_bill_id_fkey(id, code, description, quantity, unit_price, total_price)
+                `, { count: 'exact' })
+                .order('created_at', { ascending: false })
+                .range(from, to);
 
-            if (profile?.role !== 'super_admin' && profile?.branch_id) {
+            if (profile.role !== 'super_admin' && profile.branch_id) {
                 query = query.eq('branch_id', profile.branch_id);
             }
 
-            const { data, error } = await query;
+            // Server-side filters
+            if (filterStatus !== 'all') {
+                if (filterStatus === 'unpaid') {
+                    query = query.in('status', ['unpaid', 'partially_paid']);
+                } else {
+                    query = query.eq('status', filterStatus);
+                }
+            }
+            if (startDate) {
+                query = query.gte('bill_date', startDate);
+            }
+            if (endDate) {
+                query = query.lte('bill_date', endDate);
+            }
+            if (filterMedicalAid !== 'all') {
+                query = query.eq('medical_aid_id', filterMedicalAid);
+            }
+            if (debouncedSearch.trim()) {
+                const searchTerm = debouncedSearch.trim();
+                // Look up patients whose name, patient_number, or file_number matches
+                const { data: matchingPatients } = await supabase
+                    .from('patients')
+                    .select('id')
+                    .or(
+                        `full_name.ilike.%${searchTerm}%,patient_number.ilike.%${searchTerm}%,file_number.ilike.%${searchTerm}%`
+                    );
+                const matchingPatientIds = (matchingPatients || []).map((p: any) => p.id);
+
+                if (matchingPatientIds.length > 0) {
+                    // Match on bill_number OR any of the matched patient IDs
+                    query = query.or(
+                        `bill_number.ilike.%${searchTerm}%,patient_id.in.(${matchingPatientIds.join(',')})`
+                    );
+                } else {
+                    // No matching patients — fall back to bill_number only
+                    query = query.or(
+                        `bill_number.ilike.%${searchTerm}%`
+                    );
+                }
+            }
+
+            const { data, error, count } = await query;
             if (error) throw error;
 
             const structuredData = (data || []).map((inv: any) => ({
@@ -229,6 +319,8 @@ export function ActualBills() {
             }));
 
             setBills(structuredData);
+            setTotalBillDbCount(count || 0);
+            hasLoadedOnce.current = true;
         } catch (error) {
             console.error('Error loading bills:', error);
         } finally {
@@ -240,6 +332,7 @@ export function ActualBills() {
         const data = filteredBills.map((inv: Bill) => ({
             'INV #': inv.bill_number,
             'Patient': inv.patient?.full_name,
+            'File No': inv.patient?.file_number ? inv.patient.file_number.split('-')[0] : 'NO FILE',
             'Date': new Date(inv.bill_date).toLocaleDateString(),
             'Total Amount': inv.total_amount,
             'Paid Amount': inv.paid_amount,
@@ -250,11 +343,12 @@ export function ActualBills() {
     };
 
     const handleExportPDF = () => {
-        const headers = ['#', 'Bill', 'Patient', 'Total', 'Paid', 'Balance', 'Status'];
+        const headers = ['#', 'Bill', 'Patient', 'File No', 'Total', 'Paid', 'Balance', 'Status'];
         const data = filteredBills.map((inv: Bill, i) => [
             i + 1,
             inv.bill_number,
             inv.patient?.full_name || 'N/A',
+            inv.patient?.file_number ? inv.patient.file_number.split('-')[0] : 'NO FILE',
             `$${inv.total_amount.toLocaleString()}`,
             `$${inv.paid_amount.toLocaleString()}`,
             `$${inv.balance.toLocaleString()}`,
@@ -265,11 +359,10 @@ export function ActualBills() {
 
     const loadPatients = async () => {
         try {
-            const { data, error } = await supabase
-                .from('patients')
-                .select('id, full_name, patient_number, email, medical_aid_id, default_payment_method')
-                .order('full_name');
-            if (error) throw error;
+            const data = await fetchAllPatients({
+                branchId: profile?.branch_id,
+                select: 'id, full_name, patient_number, email, medical_aid_id, default_payment_method'
+            });
             setPatients(data || []);
         } catch (error) {
             console.error('Error loading patients:', error);
@@ -428,14 +521,18 @@ export function ActualBills() {
     };
 
     const handleDelete = async (id: string, billNumber: string) => {
-        if (!window.confirm(`Are you sure you want to delete bill ${billNumber}? This action cannot be undone.`)) return;
+        if (!window.confirm(`Are you sure you want to delete bill ${billNumber}? This will also delete all payments made for this bill. This action cannot be undone.`)) return;
 
         try {
             setLoading(true);
-            
-            // Delete associated items first (in case CASCADE is not set in DB)
+
+            // 1. Delete payments linked to this bill (FK: payments.bill_id → bills.id)
+            await supabase.from('payments').delete().eq('bill_id', id);
+
+            // 2. Delete bill line items
             await supabase.from('bill_items').delete().eq('bill_id', id);
 
+            // 3. Now delete the bill itself
             const { error } = await supabase
                 .from('bills')
                 .delete()
@@ -452,11 +549,11 @@ export function ActualBills() {
                     action: 'DELETE',
                     tableName: 'bills',
                     recordId: id,
-                    details: `Deleted bill ${billNumber}`
+                    details: `Deleted bill ${billNumber} and all associated payments`
                 });
             }
 
-            showToast('Bill deleted successfully');
+            showToast('Bill and associated payments deleted successfully');
             loadBills();
         } catch (error: any) {
             console.error('Error deleting bill:', error);
@@ -474,7 +571,15 @@ export function ActualBills() {
             const discountAmount = parseFloat(formData.discount) || 0;
             
             if (editingBillId) {
-                // UPDATE
+                // UPDATE — fetch current paid_amount so we can recalculate balance correctly
+                const { data: currentBill } = await supabase
+                    .from('bills')
+                    .select('paid_amount, discount_amount')
+                    .eq('id', editingBillId)
+                    .single();
+                const alreadyPaid = currentBill?.paid_amount || 0;
+                const netTotal = Math.max(0, totalAmount - discountAmount);
+                const updatedBalance = Math.max(0, netTotal - alreadyPaid);
                 const { error: billError } = await supabase
                     .from('bills')
                     .update({
@@ -483,6 +588,7 @@ export function ActualBills() {
                         discount_amount: discountAmount,
                         medical_aid_amount: parseFloat(formData.medical_aid_amount) || 0,
                         shortfall_amount: parseFloat(formData.shortfall_amount) || 0,
+                        balance: updatedBalance,
                         payment_method: formData.payment_method,
                         medical_aid_id: formData.medical_aid_id || null,
                         due_date: formData.due_date,
@@ -523,6 +629,13 @@ export function ActualBills() {
                 const billNumber = `INV-${Date.now().toString().slice(-6)}`;
 
                 // 1. Create Bill
+                // balance = total minus any upfront discount; paid_amount starts at 0
+                const initialBalance = Math.max(0, totalAmount - discountAmount);
+                const medAidAmount = parseFloat(formData.medical_aid_amount) || 0;
+                const sfAmount = parseFloat(formData.shortfall_amount) || 0;
+                // For cash patients with no medical aid split, shortfall_balance = full balance
+                const initialShortfallBalance = sfAmount > 0 ? sfAmount : (medAidAmount === 0 ? initialBalance : 0);
+                const initialMedAidBalance = medAidAmount;
                 const { data: billData, error: billError } = await supabase
                     .from('bills')
                     .insert([{
@@ -532,12 +645,14 @@ export function ActualBills() {
                         bill_date: formData.bill_date || new Date().toISOString().split('T')[0],
                         total_amount: totalAmount,
                         discount_amount: discountAmount,
-                        medical_aid_amount: parseFloat(formData.medical_aid_amount) || 0,
-                        shortfall_amount: parseFloat(formData.shortfall_amount) || 0,
+                        paid_amount: 0,
+                        balance: initialBalance,
+                        medical_aid_amount: medAidAmount,
+                        shortfall_amount: sfAmount,
                         payment_method: formData.payment_method,
                         medical_aid_id: formData.medical_aid_id || null,
-                        medical_aid_balance: parseFloat(formData.medical_aid_amount) || 0,
-                        shortfall_balance: parseFloat(formData.shortfall_amount) || 0,
+                        medical_aid_balance: initialMedAidBalance,
+                        shortfall_balance: initialShortfallBalance,
                         status: 'unpaid',
                         due_date: formData.due_date,
                         notes: formData.notes || null
@@ -580,12 +695,16 @@ export function ActualBills() {
                     loadPatients();
                 }
 
-                // SUCCESS: Close modal early for better UX
-                showToast('Bill created successfully!');
+                // SUCCESS: Show next-step modal instead of just closing
                 setShowModal(false);
                 setLoading(false);
                 resetForm();
                 loadBills();
+                // Store created bill info for the success modal
+                setLastCreatedBill({ ...billData, patient: patient });
+                setLastCreatedPatientName(patient?.full_name || 'Patient');
+                setShowBillSuccessModal(true);
+                showToast('Bill created successfully!');
 
                 // 4. Background tasks (Non-critical logging & notifications)
 
@@ -627,6 +746,21 @@ export function ActualBills() {
                             referenceType: 'bill'
                         });
                     }
+
+                    // Trigger SMS Notification
+                    if (patient?.phone) {
+                        await smsService.sendSms({
+                            recipientPhone: patient.phone,
+                            triggerType: 'bill_created',
+                            variables: {
+                                patient_name: patient.full_name,
+                                bill_number: billNumber,
+                                amount: totalAmount.toLocaleString()
+                            },
+                            branchId: profile.branch_id,
+                            patientId: patient.id
+                        });
+                    }
                 }
             }
         } catch (error: any) {
@@ -655,8 +789,15 @@ export function ActualBills() {
 
     const handleRecordPayment = (bill: Bill) => {
         setSelectedBillForPayment(bill);
+        // Defensive balance: if stored balance is 0 but patient hasn't paid in full,
+        // compute it from total_amount - paid_amount (handles legacy bills created before the fix)
+        const storedBalance = bill.balance ?? 0;
+        const paidAmount = bill.paid_amount ?? 0;
+        const effectiveBalance = storedBalance > 0
+            ? storedBalance
+            : Math.max(0, (bill.total_amount || 0) - paidAmount);
         setPaymentFormData({
-            amount: (bill.balance || 0).toString(),
+            amount: effectiveBalance.toString(),
             discount: '0',
             payment_method: 'cash',
             target_portion: (bill as any).payment_method === 'medical_aid' ? 'medical_aid' : 'shortfall',
@@ -701,7 +842,13 @@ export function ActualBills() {
                         total_amount,
                         paid_amount,
                         balance,
-                        patient:patients(full_name, patient_number, phone)
+                        payment_method,
+                        medical_aid_amount,
+                        shortfall_amount,
+                        medical_aid_balance,
+                        shortfall_balance,
+                        patient:patients(full_name, patient_number, phone, email),
+                        bill_items!bill_items_bill_id_fkey(*)
                     )
                 `)
                 .single();
@@ -713,20 +860,36 @@ export function ActualBills() {
             }
 
             // 2. Update Bill (Factor in payment + discount)
+            // Use effective balance: for legacy bills where balance=0 but no payment was made,
+            // reconstruct it from total_amount - paid_amount
+            const storedBillBalance = selectedBillForPayment.balance ?? 0;
+            const previousPaid = selectedBillForPayment.paid_amount ?? 0;
+            const effectiveBillBalance = storedBillBalance > 0
+                ? storedBillBalance
+                : Math.max(0, (selectedBillForPayment.total_amount || 0) - previousPaid);
+
             const newTotalAmount = Math.max(0, (selectedBillForPayment.total_amount || 0) - discount);
             const newDiscountAmount = (selectedBillForPayment.discount_amount || 0) + discount;
-            const newPaidAmount = (selectedBillForPayment.paid_amount || 0) + amount;
-            const newBalance = Math.max(0, newTotalAmount - newPaidAmount);
+            const newPaidAmount = previousPaid + amount;
+            // Allow negative balance (credit/overpayment) — do NOT floor at 0
+            const newBalance = effectiveBillBalance - amount - discount;
 
             // Calculate individualized balances
             let currentSF = selectedBillForPayment.shortfall_balance ?? 0;
             let currentMA = selectedBillForPayment.medical_aid_balance ?? 0;
 
-            // FALLBACK: If individual balances are 0 but the bill has overall dues,
-            // initialize them from the original amounts (fixes older records)
-            if (currentSF === 0 && currentMA === 0 && (selectedBillForPayment.balance || 0) > 0) {
-                currentSF = selectedBillForPayment.shortfall_amount || 0;
-                currentMA = selectedBillForPayment.medical_aid_amount || 0;
+            // FALLBACK: If individual balances are 0 but the bill has outstanding dues,
+            // initialize them (fixes older records where shortfall_balance/medical_aid_balance weren't set)
+            const isCashBill = (selectedBillForPayment.medical_aid_amount || 0) === 0;
+            if (currentSF === 0 && currentMA === 0 && effectiveBillBalance > 0) {
+                if (isCashBill) {
+                    // Cash patient — entire balance is shortfall
+                    currentSF = effectiveBillBalance;
+                    currentMA = 0;
+                } else {
+                    currentSF = selectedBillForPayment.shortfall_amount || 0;
+                    currentMA = selectedBillForPayment.medical_aid_amount || 0;
+                }
             }
 
             let newShortfallBalance = currentSF;
@@ -734,17 +897,19 @@ export function ActualBills() {
 
             const isSplitBill = (selectedBillForPayment.medical_aid_amount || 0) > 0;
 
+
             if (paymentFormData.target_portion === 'shortfall') {
                 // Shortfall payment: both amount and discount reduce the shortfall balance
-                newShortfallBalance = Math.max(0, newShortfallBalance - (amount + discount));
+                // Allow negative (overpayment credit)
+                newShortfallBalance = newShortfallBalance - (amount + discount);
             } else if (paymentFormData.target_portion === 'medical_aid') {
                 // Medical Aid payment: amount reduces MA balance only
                 // Discount ALWAYS goes to patient shortfall on split bills
-                newMedicalAidBalance = Math.max(0, newMedicalAidBalance - amount);
+                newMedicalAidBalance = newMedicalAidBalance - amount;
                 if (isSplitBill) {
-                    newShortfallBalance = Math.max(0, newShortfallBalance - discount);
+                    newShortfallBalance = newShortfallBalance - discount;
                 } else {
-                    newMedicalAidBalance = Math.max(0, newMedicalAidBalance - discount);
+                    newMedicalAidBalance = newMedicalAidBalance - discount;
                 }
             }
             
@@ -797,10 +962,33 @@ export function ActualBills() {
             }
 
             showToast('Payment recorded successfully!');
-            setLastRecordedPayment(paymentData);
+            // Merge bill_items from the already-loaded bill so the receipt shows procedures
+            const paymentWithItems = {
+                ...paymentData,
+                bill: {
+                    ...(paymentData as any).bill,
+                    bill_items: selectedBillForPayment.bill_items || []
+                }
+            };
+            setLastRecordedPayment(paymentWithItems as any);
             setShowPaymentModal(false);
             setShowReceiptView(true);
             loadBills();
+
+            // Silently auto-allocate any remaining credit to other unpaid invoices
+            autoAllocateCredits(
+              selectedBillForPayment.patient_id,
+              profile?.branch_id ?? null
+            ).then(result => {
+              if (result.allocated > 0) {
+                showToast(
+                  `Credit of $${result.allocated.toLocaleString()} auto-applied to ${result.billsCleared} invoice(s)`,
+                  'success'
+                );
+                loadBills();
+              }
+            });
+
         } catch (error: any) {
             console.error('Error recording payment:', error);
             showToast(error.message || 'Failed to record payment', 'error');
@@ -809,14 +997,41 @@ export function ActualBills() {
         }
     };
 
-    const paginated = filteredBills.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+    // Open invoice print view and update URL
+    const openInvoicePrint = (bill: Bill) => {
+        setSelectedBillForPrint(bill as any);
+        setShowPrintView(true);
+        window.history.pushState({}, '', `/bills/invoice/${bill.id}`);
+    };
+
+    // Close invoice print view and restore URL
+    const closeInvoicePrint = () => {
+        setShowPrintView(false);
+        setSelectedBillForPrint(null);
+        window.history.pushState({}, '', '/bills');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+    };
+
+    // Auto-restore invoice view from URL on refresh
+    useEffect(() => {
+        if (!invoiceIdFromUrl || bills.length === 0) return;
+        const match = bills.find(b => b.id === invoiceIdFromUrl);
+        if (match) {
+            setSelectedBillForPrint(match as any);
+            setShowPrintView(true);
+            setInvoiceIdFromUrl(null);
+        }
+    }, [invoiceIdFromUrl, bills]);
+
+    // Data is already server-paginated — use directly
+    const paginated = filteredBills;
 
     if (showPrintView && selectedBillForPrint && branch) {
         return (
             <BillPrintView 
                 data={selectedBillForPrint as any} 
                 branch={branch} 
-                onBack={() => setShowPrintView(false)} 
+                onBack={closeInvoicePrint} 
             />
         );
     }
@@ -888,7 +1103,7 @@ export function ActualBills() {
                             type="text"
                             placeholder="Search Patient/INV..."
                             value={searchQuery}
-                            onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                            onChange={(e) => handleSearchChange(e.target.value)}
                             className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-medium"
                         />
                     </div>
@@ -1025,6 +1240,7 @@ export function ActualBills() {
                                 <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">#</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">INV #</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Patient</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-left text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">File No</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Invoice Date</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Method</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-3 py-3 text-right text-xs font-bold text-indigo-600 uppercase tracking-wider">MA Owing</th>
@@ -1043,7 +1259,7 @@ export function ActualBills() {
                         <tbody>
                             {loading ? (
                                 <tr>
-                                    <td colSpan={16} className="border border-gray-200 dark:border-gray-700 px-6 py-20 text-center">
+                                    <td colSpan={17} className="border border-gray-200 dark:border-gray-700 px-6 py-20 text-center">
                                         <div className="flex flex-col items-center gap-4">
                                             <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600/30 border-t-emerald-600" />
                                             <p className="text-gray-400 font-medium animate-pulse">Fetching records...</p>
@@ -1051,7 +1267,7 @@ export function ActualBills() {
                                     </td>
                                 </tr>
                             ) : filteredBills.length === 0 ? (
-                                <tr><td colSpan={16} className="border border-gray-200 dark:border-gray-700 px-5 py-16 text-center text-sm font-medium text-gray-400">No bills found</td></tr>
+                                <tr><td colSpan={17} className="border border-gray-200 dark:border-gray-700 px-5 py-16 text-center text-sm font-medium text-gray-400">No bills found</td></tr>
                             ) : (
                                 paginated.map((bill, idx) => (
                                     <tr key={bill.id} className="hover:bg-emerald-50/30 dark:hover:bg-emerald-900/10 transition">
@@ -1059,7 +1275,10 @@ export function ActualBills() {
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 font-mono text-sm font-semibold text-gray-800 dark:text-gray-200">{bill.bill_number}</td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5">
                                             <div className="text-sm font-semibold text-gray-900 dark:text-white">{bill.patient?.full_name}</div>
-                                            <div className="text-xs text-gray-400 font-mono">{bill.patient?.patient_number}</div>
+                                            <div className="text-xs text-blue-600 font-mono">{bill.patient?.patient_number}</div>
+                                        </td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                            {bill.patient?.file_number ? bill.patient.file_number.split('-')[0] : <span className="text-gray-400 font-normal">NO FILE</span>}
                                         </td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-sm text-gray-600 dark:text-gray-300">
                                             {bill.bill_date || (bill as any).created_at ? new Date(bill.bill_date || (bill as any).created_at).toLocaleDateString() : '—'}
@@ -1078,9 +1297,21 @@ export function ActualBills() {
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-semibold text-amber-500">${(bill.discount_amount || 0).toLocaleString()}</span></td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-gray-800 dark:text-white">${bill.total_amount.toLocaleString()}</span></td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-green-600">${(bill.paid_amount || 0).toLocaleString()}</span></td>
-                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-blue-600">${(bill.medical_aid_balance || 0).toLocaleString()}</span></td>
-                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-rose-600">${(bill.shortfall_balance || 0).toLocaleString()}</span></td>
-                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-amber-600">${(bill.balance || 0).toLocaleString()}</span></td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-blue-600">${(
+                                            (() => { const s = bill.medical_aid_balance ?? 0; const p = bill.paid_amount ?? 0; return s > 0 ? s : (bill.payment_method === 'medical_aid' ? Math.max(0, (bill.medical_aid_amount || 0)) : 0); })()
+                                        ).toLocaleString()}</span></td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right"><span className="text-sm font-bold text-rose-600">${(
+                                            (() => { const s = bill.shortfall_balance ?? 0; const p = bill.paid_amount ?? 0; const eff = s > 0 ? s : (bill.payment_method !== 'medical_aid' ? Math.max(0, (bill.total_amount || 0) - (bill.discount_amount || 0) - p) : Math.max(0, (bill.shortfall_amount || 0))); return eff; })()
+                                        ).toLocaleString()}</span></td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5 text-right">{(() => {
+                                            const stored = bill.balance ?? 0;
+                                            const paid = bill.paid_amount ?? 0;
+                                            const effectiveBal = stored !== 0 ? stored : Math.max(0, (bill.total_amount || 0) - (bill.discount_amount || 0) - paid);
+                                            if (effectiveBal < 0) {
+                                                return <span className="text-sm font-black text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded">CR ${Math.abs(effectiveBal).toLocaleString()}</span>;
+                                            }
+                                            return <span className="text-sm font-bold text-amber-600">${effectiveBal.toLocaleString()}</span>;
+                                        })()}</td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-3 py-2.5">
                                             <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold uppercase ${
                                                 bill.status === 'paid' ? 'bg-green-100 text-green-700 border border-green-200' :
@@ -1093,7 +1324,7 @@ export function ActualBills() {
                                                 {hasPermission('billing', 'edit') && <button onClick={() => handleEdit(bill)} className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition" title="Edit"><Pencil className="w-4 h-4" /></button>}
                                                 {hasPermission('billing', 'edit') && <button onClick={() => handleRecordPayment(bill)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition" title="Record Payment"><DollarSign className="w-4 h-4" /></button>}
                                                 {hasPermission('billing', 'delete') && <button onClick={() => handleDelete(bill.id, bill.bill_number)} className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition" title="Delete"><Trash2 className="w-4 h-4" /></button>}
-                                                <button onClick={() => { setSelectedBillForPrint(bill as any); setShowPrintView(true); }} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition" title="Print"><FileText className="w-4 h-4" /></button>
+                                                <button onClick={() => openInvoicePrint(bill as any)} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition" title="Print"><FileText className="w-4 h-4" /></button>
                                             </div>
                                         </td>
                                     </tr>
@@ -1108,16 +1339,16 @@ export function ActualBills() {
                     <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
                         <div className="flex items-center space-x-4">
                             <p className="text-xs text-gray-500">
-                                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredBills.length)} of {filteredBills.length}
+                                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalBillDbCount)} of {totalBillDbCount}
                             </p>
                             <div className="flex items-center space-x-2">
                                 <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
                                 <select
-                                    value={itemsPerPage === filteredBills.length ? 'all' : itemsPerPage}
+                                    value={itemsPerPage === totalBillDbCount ? 'all' : itemsPerPage}
                                     onChange={(e) => {
                                         const val = e.target.value;
                                         if (val === 'all') {
-                                            setItemsPerPage(filteredBills.length || 1);
+                                            setItemsPerPage(totalBillDbCount || 1);
                                         } else {
                                             setItemsPerPage(Number(val));
                                         }
@@ -1134,7 +1365,7 @@ export function ActualBills() {
                             </div>
                         </div>
                         
-                        {itemsPerPage < filteredBills.length && totalPages > 1 && (
+                        {totalPages > 1 && (
                             <div className="flex gap-2">
                                 <button
                                     disabled={currentPage === 1}
@@ -1480,9 +1711,38 @@ export function ActualBills() {
                                 </div>
                                 <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800/50">
                                     <p className="text-[9px] font-black uppercase text-amber-600">Current Balance</p>
-                                    <p className="text-base font-black text-amber-700 dark:text-amber-300">${(selectedBillForPayment.balance || 0).toLocaleString()}</p>
+                                    <p className="text-base font-black text-amber-700 dark:text-amber-300">${(
+                                        (() => {
+                                            const stored = selectedBillForPayment.balance ?? 0;
+                                            const paid = selectedBillForPayment.paid_amount ?? 0;
+                                            return stored > 0 ? stored : Math.max(0, (selectedBillForPayment.total_amount || 0) - paid);
+                                        })()
+                                    ).toLocaleString()}</p>
                                 </div>
                             </div>
+
+                            {/* Live Overpayment / Credit indicator */}
+                            {(() => {
+                                const stored = selectedBillForPayment.balance ?? 0;
+                                const paid = selectedBillForPayment.paid_amount ?? 0;
+                                const effectiveBal = stored > 0 ? stored : Math.max(0, (selectedBillForPayment.total_amount || 0) - paid);
+                                const enteredAmt = parseFloat(paymentFormData.amount) || 0;
+                                const credit = enteredAmt - effectiveBal;
+                                if (credit <= 0) return null;
+                                return (
+                                    <div className="flex items-center gap-3 p-3 bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-700 rounded-xl">
+                                        <div className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-800 flex items-center justify-center flex-shrink-0">
+                                            <span className="text-violet-600 font-black text-sm">↑</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase text-violet-600 tracking-widest">Overpayment / Credit</p>
+                                            <p className="text-sm font-black text-violet-700 dark:text-violet-300">
+                                                +${credit.toLocaleString(undefined, { minimumFractionDigits: 2 })} credit will be recorded on this account
+                                            </p>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
@@ -1516,7 +1776,7 @@ export function ActualBills() {
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className={`grid gap-4 ${selectedBillForPayment.payment_method === 'medical_aid' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Payment Method</label>
                                     <select
@@ -1530,17 +1790,19 @@ export function ActualBills() {
                                         <option value="card">Card</option>
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Target Portion</label>
-                                    <select
-                                        value={paymentFormData.target_portion}
-                                        onChange={(e) => setPaymentFormData({ ...paymentFormData, target_portion: e.target.value as any })}
-                                        className="w-full p-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold"
-                                    >
-                                        <option value="shortfall">Patient Shortfall</option>
-                                        <option value="medical_aid">Medical Aid Portion</option>
-                                    </select>
-                                </div>
+                                {selectedBillForPayment.payment_method === 'medical_aid' && (
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Target Portion</label>
+                                        <select
+                                            value={paymentFormData.target_portion}
+                                            onChange={(e) => setPaymentFormData({ ...paymentFormData, target_portion: e.target.value as any })}
+                                            className="w-full p-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold"
+                                        >
+                                            <option value="shortfall">Patient Shortfall</option>
+                                            <option value="medical_aid">Medical Aid Portion</option>
+                                        </select>
+                                    </div>
+                                )}
                             </div>
 
                             <div>
@@ -1561,6 +1823,81 @@ export function ActualBills() {
                                 {loading ? 'Recording...' : 'Record Payment'}
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Post-Bill-Creation Success Modal */}
+            {showBillSuccessModal && lastCreatedBill && (
+                <div className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                        {/* Success Header */}
+                        <div className="bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-5 text-center">
+                            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
+                                <CheckCircle className="w-8 h-8 text-white" />
+                            </div>
+                            <h2 className="text-xl font-black text-white">Bill Created!</h2>
+                            <p className="text-emerald-100 text-sm mt-1">Invoice generated successfully</p>
+                        </div>
+
+                        {/* Bill Details */}
+                        <div className="px-6 py-5 space-y-4">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-100 dark:border-gray-600 text-center">
+                                    <p className="text-[9px] font-black uppercase text-gray-500 tracking-widest">Invoice #</p>
+                                    <p className="text-sm font-black text-gray-900 dark:text-white mt-0.5">{lastCreatedBill.bill_number}</p>
+                                </div>
+                                <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl border border-emerald-100 dark:border-emerald-800/50 text-center">
+                                    <p className="text-[9px] font-black uppercase text-emerald-600 tracking-widest">Total</p>
+                                    <p className="text-sm font-black text-emerald-700 dark:text-emerald-300 mt-0.5">${(lastCreatedBill.total_amount || 0).toLocaleString()}</p>
+                                </div>
+                            </div>
+                            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/50">
+                                <p className="text-[9px] font-black uppercase text-blue-600 tracking-widest">Patient</p>
+                                <p className="text-sm font-bold text-blue-800 dark:text-blue-300 mt-0.5">{lastCreatedPatientName}</p>
+                            </div>
+
+                            {/* Balance indicator */}
+                            {(lastCreatedBill.balance > 0) && (
+                                <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800/50 text-center">
+                                    <p className="text-[9px] font-black uppercase text-amber-600 tracking-widest">Balance Due</p>
+                                    <p className="text-lg font-black text-amber-700 dark:text-amber-300">${(lastCreatedBill.balance || 0).toLocaleString()}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="px-6 pb-6 flex gap-3">
+                            <button
+                                onClick={() => setShowBillSuccessModal(false)}
+                                className="flex-1 py-3 px-4 border-2 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-all"
+                            >
+                                Close
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setShowBillSuccessModal(false);
+                                    // Find the refreshed bill from the list (with patient join)
+                                    setTimeout(() => {
+                                        const freshBill = bills.find(b => b.id === lastCreatedBill.id);
+                                        const billToUse = freshBill || lastCreatedBill;
+                                        setSelectedBillForPayment(billToUse);
+                                        setPaymentFormData({
+                                            amount: '',
+                                            discount: '0',
+                                            payment_method: billToUse.payment_method === 'medical_aid' ? 'cash' : (billToUse.payment_method || 'cash'),
+                                            target_portion: 'shortfall',
+                                            notes: ''
+                                        });
+                                        setShowPaymentModal(true);
+                                    }, 200); // Short delay to let bills list refresh
+                                }}
+                                className="flex-[2] py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm shadow-lg shadow-emerald-500/30 transition-all flex items-center justify-center gap-2"
+                            >
+                                <Banknote className="w-4 h-4" />
+                                Collect Payment
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

@@ -95,7 +95,7 @@ export function ApprovalRequestPanel() {
   if (!isAdmin || requests.length === 0) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-[150] w-full max-w-sm">
+    <div className="print:hidden fixed bottom-6 right-6 z-[150] w-full max-w-sm">
       {/* Header toggle */}
       <button
         onClick={() => setIsExpanded(e => !e)}

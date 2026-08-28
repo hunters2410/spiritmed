@@ -1,0 +1,82 @@
+=== SCHEMA FOR: appointment ===
+CREATE TABLE `appointment` (
+  `id` int(11) NOT NULL,
+  `patient` varchar(100) DEFAULT NULL,
+  `doctor` varchar(100) DEFAULT NULL,
+  `date` varchar(100) DEFAULT NULL,
+  `time_slot` varchar(100) DEFAULT NULL,
+  `s_time` varchar(100) DEFAULT NULL,
+  `e_time` varchar(100) DEFAULT NULL,
+  `remarks` varchar(500) DEFAULT NULL,
+  `add_date` varchar(100) DEFAULT NULL,
+  `registration_time` varchar(100) DEFAULT NULL,
+  `s_time_key` varchar(100) DEFAULT NULL,
+  `status` varchar(100) DEFAULT NULL,
+  `user` varchar(100) DEFAULT NULL,
+  `request` varchar(100) DEFAULT NULL,
+  `patientname` varchar(1000) DEFAULT NULL,
+  `doctorname` varchar(1000) DEFAULT NULL,
+  `room_id` varchar(500) DEFAULT NULL,
+  `live_meeting_link` varchar(500) DEFAULT NULL,
+  `app_time` varchar(500) DEFAULT NULL,
+  `app_time_full_format` varchar(500) DEFAULT NULL,
+  `payment_status` varchar(1000) DEFAULT NULL,
+  `visit_description` varchar(1000) DEFAULT NULL,
+  `visit_charges` varchar(1000) DEFAULT NULL,
+  `payment_id` varchar(1000) DEFAULT NULL,
+  `discount` varchar(1000) DEFAULT NULL,
+  `grand_total` varchar(1000) DEFAULT NULL,
+  `cron_job` varchar(200) DEFAULT '1',
+  `reason` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+
+
+=== SAMPLE DATA FOR: appointment ===
+INSERT INTO `appointment` (`id`, `patient`, `doctor`, `date`, `time_slot`, `s_time`, `e_time`, `remarks`, `add_date`, `registration_time`, `s_time_key`, `status`, `user`, `request`, `patientname`, `doctorname`, `room_id`, `live_meeting_link`, `app_time`, `app_time_full_format`, `payment_status`, `visit_description`, `visit_charges`, `payment_id`, `discount`, `grand_total`, `cron_job`, `reason`) VALUES
+(1, '2810', '229812', '1689544800', '09:00 AM To 09:15 AM', '09:00 AM', '09:15 AM', 'Review', '07/14/23', '1689330940', '108', 'Confirmed', '1', '', 'ThoMas Kadiki', 'DR. SC Meki', 'hms-meeting-263776636859-724453', 'https://meet.jit.si/hms-meeting-263776636859-724453', '1689577200', '17-07-2023 09:00 AM-09:15 AM', 'unpaid', 'Select', NULL, '1', NULL, NULL, NULL, NULL),
+(2, '3890', '229812', '1689544800', '09:15 AM To 09:30 AM', '09:15 AM', '09:30 AM', 'Review', '07/14/23', '1689331031', '111', 'Confirmed', '1', '', 'Edgar Murahwa', 'DR. SC Meki', 'hms-meeting-263772686525-892485', 'https://meet.jit.si/hms-meeting-263772686525-892485', '1689578100', '17-07-2023 09:15 AM-09:30 AM', 'unpaid', 'Select', NULL, '2', NULL, NULL, NULL, NULL),
+(3, '4078', '229812', '1689544800', '09:30 AM To 09:45 AM', '09:30 AM', '09:45 AM', 'Review', '07/14/23', '1689333269', '114', 'Confirmed', '1', '', 'Cathrine Pedzisayi', 'DR. SC Meki', 'hms-meeting-263775692986-291719', 'https://meet.jit.si/hms-meeting-263775692986-291719', '1689579000', '17-07-2023 09:30 AM-09:45 AM', 'unpaid', 'Select', NULL, '3', NULL, NULL, NULL, NULL),
+
+
+=== SCHEMA FOR: payment ===
+CREATE TABLE `payment` (
+  `id` int(11) NOT NULL,
+  `category` varchar(100) DEFAULT NULL,
+  `patient` varchar(100) DEFAULT NULL,
+  `doctor` varchar(100) DEFAULT NULL,
+  `date` varchar(100) DEFAULT NULL,
+  `amount` varchar(100) DEFAULT NULL,
+  `vat` varchar(100) NOT NULL DEFAULT '0',
+  `x_ray` varchar(100) DEFAULT NULL,
+  `flat_vat` varchar(100) DEFAULT NULL,
+  `discount` varchar(1000) DEFAULT NULL,
+  `flat_discount` varchar(100) DEFAULT NULL,
+  `gross_total` varchar(100) DEFAULT NULL,
+  `remarks` varchar(500) DEFAULT NULL,
+  `hospital_amount` varchar(100) DEFAULT NULL,
+  `doctor_amount` varchar(100) DEFAULT NULL,
+  `category_amount` varchar(1000) DEFAULT NULL,
+  `category_name` varchar(1000) DEFAULT NULL,
+  `amount_received` varchar(100) DEFAULT NULL,
+  `deposit_type` varchar(100) DEFAULT NULL,
+  `status` varchar(100) DEFAULT NULL,
+  `user` varchar(100) DEFAULT NULL,
+  `patient_name` varchar(100) DEFAULT NULL,
+  `patient_phone` varchar(100) DEFAULT NULL,
+  `patient_address` varchar(100) DEFAULT NULL,
+  `doctor_name` varchar(100) DEFAULT NULL,
+  `date_string` varchar(100) DEFAULT NULL,
+  `payment_from` varchar(1000) DEFAULT NULL,
+  `appointment_id` varchar(1000) DEFAULT NULL,
+  `note` varchar(200) DEFAULT NULL,
+  `rate` varchar(200) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+
+
+=== SAMPLE DATA FOR: payment ===
+INSERT INTO `payment` (`id`, `category`, `patient`, `doctor`, `date`, `amount`, `vat`, `x_ray`, `flat_vat`, `discount`, `flat_discount`, `gross_total`, `remarks`, `hospital_amount`, `doctor_amount`, `category_amount`, `category_name`, `amount_received`, `deposit_type`, `status`, `user`, `patient_name`, `patient_phone`, `patient_address`, `doctor_name`, `date_string`, `payment_from`, `appointment_id`, `note`, `rate`) VALUES
+(1, NULL, '5102', '229812', '1705267684', '2450', '0', NULL, NULL, '0', '0', '2450', '', '2450', '0', NULL, '5*150*CONSULTATION IN HOSPITAL*1,19*1100*EMERGENCY DJ STENT INSERTION*1,17*700*EXCISION / INCSITION OF URETEROCELE*1,15*500*CYSTOLITHOLAPAXY*1', '', 'Cash', 'unpaid', '1', 'Cicilia Shoriwa', '263772457032', '14228 Madokero Estate Tynwald', 'DR. SC Meki', '14-01-2024', 'payment', NULL, NULL, NULL),
+(5, NULL, '5025', '229812', '1705268188', '50', '0', NULL, NULL, '0', '0', '50', '', '50', '0', NULL, '6*50*REVIEW IN ROOMS*1', '50', 'Cash', 'unpaid', '4433', NULL, NULL, NULL, 'DR. SC Meki', '14-01-2024', 'payment', NULL, NULL, ''),
+(7, NULL, '4676', '229812', '1705268532', '50', '0', NULL, NULL, '0', '0', '50', '', '50', '0', NULL, '6*50*REVIEW IN ROOMS*1', '', 'Cash', 'unpaid', '4433', 'Gamuchirai Madziyire', '263772260739', '3061 Umwinsdale Road Glen lorne', 'DR. SC Meki', '14-01-2024', 'payment', NULL, NULL, NULL),
+
+

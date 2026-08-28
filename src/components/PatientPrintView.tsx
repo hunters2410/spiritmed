@@ -4,6 +4,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { supabase } from '../lib/supabase';
 import { emailService } from '../utils/emailService';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 interface Branch {
     id: string;
@@ -56,6 +57,9 @@ interface Patient {
     medical_aid?: { name: string };
     status: string;
     created_at: string;
+    total_due?: number;
+    total_shortfall_due?: number;
+    total_medical_aid_due?: number;
 }
 
 interface Props {
@@ -71,17 +75,7 @@ export function PatientPrintView({ patient, branch, onBack }: Props) {
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { 
-            scale: 2,
-            useCORS: true,
-            allowTaint: true
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`PATIENT_RECORD_${patient.patient_number}.pdf`);
+        await exportElementToPdf(printRef.current, `PATIENT_RECORD_${patient.patient_number}.pdf`);
     };
 
     const handleSendEmail = async () => {
@@ -92,18 +86,7 @@ export function PatientPrintView({ patient, branch, onBack }: Props) {
 
         try {
             setIsSending(true);
-            const canvas = await html2canvas(printRef.current, { 
-                scale: 2,
-                useCORS: true,
-                allowTaint: true
-            });
-            const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-            
-            const pdfBlob = pdf.output('blob');
+            const pdfBlob = (await exportElementToPdf(printRef.current, '', true)) as Blob;
             const fileName = `RECORD_${patient.patient_number}_${Date.now()}.pdf`;
             const filePath = `patient_records/${patient.id}/${fileName}`;
 
@@ -150,9 +133,15 @@ export function PatientPrintView({ patient, branch, onBack }: Props) {
                 </button>
             </div>
 
+            <style>{`
+                @media print {
+                    @page { size: A4 portrait; margin: 10mm; }
+                    body { background: #ffffff !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                }
+            `}</style>
             {/* Document View */}
-            <div className="flex-1 max-w-[210mm]">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
+            <div className="flex-1 w-full overflow-x-auto flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
                     {/* Header */}
                     <div className="flex justify-between items-start border-b pb-6 mb-6">
                         <div>
@@ -235,6 +224,25 @@ export function PatientPrintView({ patient, branch, onBack }: Props) {
                             <p><span className="text-gray-500">Emergency Contact:</span> <b>{patient.emergency_contact_name || '-'}</b></p>
                             <p><span className="text-gray-500">Phone:</span> <b>{patient.emergency_contact_phone || '-'}</b></p>
                         </div>
+
+                        {/* 6. Outstanding Balance */}
+                        {((patient.total_due || 0) > 0 || (patient.total_shortfall_due || 0) > 0 || (patient.total_medical_aid_due || 0) > 0) && (
+                            <>
+                                <div className="col-span-2 bg-amber-100 border border-amber-300 p-1 px-3 mt-4 font-bold uppercase text-amber-800">6. Outstanding Balance</div>
+                                <div>
+                                    <p><span className="text-gray-500">Total Due:</span> <b className="text-amber-700">${(patient.total_due || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></p>
+                                    {(patient.total_shortfall_due || 0) > 0 && (
+                                        <p><span className="text-gray-500">Patient Shortfall:</span> <b>${(patient.total_shortfall_due || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></p>
+                                    )}
+                                </div>
+                                <div>
+                                    {(patient.total_medical_aid_due || 0) > 0 && (
+                                        <p><span className="text-gray-500">Medical Aid Due:</span> <b>${(patient.total_medical_aid_due || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></p>
+                                    )}
+                                    <p><span className="text-gray-500">Status:</span> <b className="text-amber-700">Balance Outstanding</b></p>
+                                </div>
+                            </>
+                        )}
                     </div>
 
                     {/* Signatures */}

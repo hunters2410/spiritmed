@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAllPatients } from '../utils/patientUtils';
 import { SearchDropdown } from '../components/SearchDropdown';
 import { Plus, Search, Microscope, Pencil, Trash2, X, Activity, FlaskConical, Filter, Eye, ChevronLeft, ChevronRight } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
@@ -94,18 +95,32 @@ export default function LabResults() {
             const bid = profile?.branch_id;
 
             const resQ = supabase.from('lab_results').select('*, patient:patients(full_name, patient_number)').order('created_at', { ascending: false });
-            const patQ = supabase.from('patients').select('id, full_name, patient_number, email');
             const histQ = supabase.from('histology_types').select('id, name, value').order('name');
 
             if (bid) {
                 resQ.eq('branch_id', bid);
-                patQ.eq('branch_id', bid);
                 histQ.eq('branch_id', bid);
             }
 
-            const [resData, patData, histData] = await Promise.all([resQ, patQ, histQ]);
-            setResults(resData.data || []);
-            setPatients(patData.data || []);
+            let allLabRes: any[] = [];
+            let fromLab = 0;
+            const pageSizeLab = 1000;
+            while (true) {
+                let lQ = supabase.from('lab_results').select('*, patient:patients(full_name, patient_number)').order('created_at', { ascending: false }).range(fromLab, fromLab + pageSizeLab - 1);
+                if (bid) lQ = lQ.eq('branch_id', bid);
+                const { data, error } = await lQ;
+                if (error || !data || data.length === 0) break;
+                allLabRes = allLabRes.concat(data);
+                if (data.length < pageSizeLab) break;
+                fromLab += pageSizeLab;
+            }
+
+            const [allPats, histData] = await Promise.all([
+                fetchAllPatients({ branchId: bid, select: 'id, full_name, patient_number, email' }),
+                histQ
+            ]);
+            setResults(allLabRes);
+            setPatients(allPats || []);
             setHistologyTypes(histData.data || []);
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
@@ -200,12 +215,31 @@ export default function LabResults() {
     async function handleAddPatient(e: React.FormEvent) {
         e.preventDefault();
         if (!profile?.branch_id) return;
-        const patient_number = `P${Date.now().toString().slice(-6)}`;
-        const generatedEmail = newPatientForm.email || `patient.${patient_number.toLowerCase()}@spiritmed.com`;
+        if (newPatientForm.email) {
+            const trimmedEmail = newPatientForm.email.trim();
+            const { data: existingEmail } = await supabase.from('patients').select('id, full_name, patient_number').ilike('email', trimmedEmail);
+            if (existingEmail && existingEmail.length > 0) {
+                alert(`⚠️ Alert: Email "${trimmedEmail}" is already registered to patient "${existingEmail[0].full_name}" (${existingEmail[0].patient_number}). Please enter a unique email address or leave blank.`);
+                return;
+            }
+        }
+        if (newPatientForm.file_number) {
+            const trimmedFile = newPatientForm.file_number.trim();
+            const { data: existingFile } = await supabase.from('patients').select('id, full_name, patient_number, status').eq('file_number', trimmedFile);
+            if (existingFile && existingFile.length > 0) {
+                const activeOccupant = existingFile.find(p => p.status === 'active' || (p.status !== 'old_patient' && p.status !== 'inactive'));
+                if (activeOccupant) {
+                    alert(`⚠️ Alert: File Number "${trimmedFile}" is already occupied by active patient "${activeOccupant.full_name}" (${activeOccupant.patient_number}). Please choose a different file number.`);
+                    return;
+                }
+            }
+        }
+        const patient_number = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+        const finalEmail = newPatientForm.email ? newPatientForm.email.trim() : null;
         const generatedPassword = 'patient123456';
         const { data, error } = await supabase.from('patients').insert([{
             ...newPatientForm,
-            email: generatedEmail,
+            email: finalEmail,
             password: generatedPassword,
             patient_number,
             branch_id: profile.branch_id,

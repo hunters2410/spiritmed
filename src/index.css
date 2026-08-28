@@ -28,13 +28,40 @@
   }
 }
 
+/* ─── Rich Text Editor & Clinical Document List Styles ─── */
+.rich-text-content ul,
+[contenteditable] ul {
+  list-style-type: disc !important;
+  margin-left: 1.5rem !important;
+  padding-left: 0.5rem !important;
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.35rem !important;
+}
+
+.rich-text-content ol,
+[contenteditable] ol {
+  list-style-type: decimal !important;
+  margin-left: 1.5rem !important;
+  padding-left: 0.5rem !important;
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.35rem !important;
+}
+
+.rich-text-content li,
+[contenteditable] li {
+  margin-bottom: 0.2rem !important;
+  display: list-item !important;
+}
+
 @media print {
-  /* Hide sidebar, topbar header, and any elements marked as print:hidden */
+  /* Hide sidebar, topbar header, mobile bottom nav, floating panels, and any elements marked as print:hidden */
   aside,
   header,
   footer,
   .print\:hidden,
-  [class*="ApprovalRequestPanel"] {
+  [class*="ApprovalRequestPanel"],
+  div[class*="fixed bottom-0"],
+  div[class*="fixed inset-0"] {
     display: none !important;
   }
 

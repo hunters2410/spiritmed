@@ -4,6 +4,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { supabase } from '../lib/supabase';
 import { emailService } from '../utils/emailService';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 interface Branch {
     id: string;
@@ -51,17 +52,7 @@ export function EstimatePrintView({ data, branch, onBack }: Props) {
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { 
-            scale: 2,
-            useCORS: true,
-            allowTaint: true
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`ESTIMATE_${data.estimate_number}.pdf`);
+        await exportElementToPdf(printRef.current, `ESTIMATE_${data.estimate_number}.pdf`);
     };
 
     const handleSendEmail = async () => {
@@ -72,18 +63,7 @@ export function EstimatePrintView({ data, branch, onBack }: Props) {
 
         try {
             setIsSending(true);
-            const canvas = await html2canvas(printRef.current, { 
-                scale: 2,
-                useCORS: true,
-                allowTaint: true
-            });
-            const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-            
-            const pdfBlob = pdf.output('blob');
+            const pdfBlob = (await exportElementToPdf(printRef.current, '', true)) as Blob;
             const fileName = `ESTIMATE_${data.estimate_number}_${Date.now()}.pdf`;
             const filePath = `estimates/${data.id}/${fileName}`;
 
@@ -135,9 +115,15 @@ export function EstimatePrintView({ data, branch, onBack }: Props) {
                 </button>
             </div>
 
+            <style>{`
+                @media print {
+                    @page { size: A4 portrait; margin: 10mm; }
+                    body { background: #ffffff !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                }
+            `}</style>
             {/* Document View */}
-            <div className="flex-1 max-w-[210mm]">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
+            <div className="flex-1 w-full overflow-x-auto flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
                     {/* Header */}
                     <div className="flex justify-between items-start border-b pb-6 mb-6">
                         <div>

@@ -64,7 +64,7 @@ export function AppointmentReports() {
             setLoading(true);
             let query = supabase
                 .from('appointments')
-                .select('id, status, appointment_date, appointment_type, doctor_id, branch_id, users:doctor_id(full_name)');
+                .select('id, status, appointment_date, appointment_type, doctor_id, branch_id, users:doctor_id!left(full_name)');
 
             if (filters.startDate) query = query.gte('appointment_date', filters.startDate);
             if (filters.endDate) query = query.lte('appointment_date', filters.endDate + 'T23:59:59');

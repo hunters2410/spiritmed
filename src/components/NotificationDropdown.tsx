@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, Check, Trash2, ExternalLink, Info, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
+import { Bell, Check, Trash2, ExternalLink, Info, CheckCircle, AlertTriangle, XCircle, MessageSquare } from 'lucide-react';
 import { useNotifications } from '../contexts/NotificationContext';
 
 function formatRelativeTime(date: Date) {
@@ -37,6 +37,8 @@ export function NotificationDropdown() {
 
   const getIcon = (type: string = 'info') => {
     switch (type) {
+      case 'chat_message':
+        return <MessageSquare className="w-5 h-5 text-indigo-500" />;
       case 'success':
         return <CheckCircle className="w-5 h-5 text-emerald-500" />;
       case 'warning':

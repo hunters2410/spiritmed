@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Plus, Search, Shield, X, Lock, LayoutGrid, List } from 'lucide-react';
-import { PermissionGrid, Permissions } from '../components/PermissionGrid';
+import { PermissionGrid, Permissions, MODULES } from '../components/PermissionGrid';
 
 interface Role {
   id: string;
@@ -14,30 +14,13 @@ interface Role {
   created_at: string;
 }
 
-const DEFAULT_PERMISSIONS: Permissions = {
-  dashboard: { view: true, add: false, edit: false, delete: false },
-  branches: { view: false, add: false, edit: false, delete: false },
-  patients: { view: false, add: false, edit: false, delete: false },
-  appointments: { view: false, add: false, edit: false, delete: false },
-  medical_records: { view: false, add: false, edit: false, delete: false },
-  clinical_reports: { view: false, add: false, edit: false, delete: false },
-  clinical_setup: { view: false, add: false, edit: false, delete: false },
-  inventory: { view: false, add: false, edit: false, delete: false },
-  billing: { view: false, add: false, edit: false, delete: false },
-  medical_aids: { view: false, add: false, edit: false, delete: false },
-  staff: { view: false, add: false, edit: false, delete: false },
-  attendance: { view: false, add: false, edit: false, delete: false },
-  leave_management: { view: false, add: false, edit: false, delete: false },
-  payroll: { view: false, add: false, edit: false, delete: false },
-  human_resources: { view: false, add: false, edit: false, delete: false },
-  communication: { view: false, add: false, edit: false, delete: false },
-  statistics: { view: false, add: false, edit: false, delete: false },
-  audit_logs: { view: false, add: false, edit: false, delete: false },
-  settings: { view: false, add: false, edit: false, delete: false }
-};
+const DEFAULT_PERMISSIONS: Permissions = MODULES.reduce((acc, mod) => {
+  acc[mod.id] = { view: mod.id === 'dashboard', add: false, edit: false, delete: false };
+  return acc;
+}, {} as Permissions);
 
 export function Roles() {
-  const { profile } = useAuth();
+  const { profile, hasPermission } = useAuth();
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -180,13 +163,15 @@ export function Roles() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Roles Management</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">Configure custom roles and granular module permissions</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center space-x-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition shadow-md"
-        >
-          <Plus className="w-5 h-5" />
-          <span>Add Role</span>
-        </button>
+        {hasPermission('roles', 'add') && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center space-x-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition shadow-md"
+          >
+            <Plus className="w-5 h-5" />
+            <span>Add Role</span>
+          </button>
+        )}
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
@@ -238,8 +223,9 @@ export function Roles() {
                     <Shield className="w-6 h-6 text-green-600 dark:text-green-400" />
                   </div>
                   <button
-                    onClick={() => handleToggleActive(role)}
-                    className={`px-3 py-1 text-xs font-bold rounded-full border ${
+                    onClick={() => hasPermission('roles', 'edit') && handleToggleActive(role)}
+                    disabled={!hasPermission('roles', 'edit')}
+                    className={`px-3 py-1 text-xs font-bold rounded-full border ${!hasPermission('roles', 'edit') ? 'cursor-default opacity-80 ' : ''}${
                       role.is_active
                         ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-800 dark:text-green-400'
                         : 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400'
@@ -252,19 +238,17 @@ export function Roles() {
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2 min-h-[2.5rem]">
                   {role.description || 'No description provided'}
                 </p>
-                <div className="flex items-center justify-between pt-4 border-t border-gray-100 dark:border-gray-700">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] uppercase font-black text-gray-400 tracking-wider">Base Role</span>
-                    <span className="text-sm font-bold text-gray-700 dark:text-gray-300 capitalize">{role.base_role}</span>
+                {hasPermission('roles', 'edit') && (
+                  <div className="flex items-center justify-end pt-4 border-t border-gray-100 dark:border-gray-700">
+                    <button 
+                      onClick={() => handleEdit(role)}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 dark:bg-gray-700 hover:bg-green-50 dark:hover:bg-green-900/20 text-gray-600 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-400 rounded-lg transition font-bold text-xs"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      Permissions
+                    </button>
                   </div>
-                  <button 
-                    onClick={() => handleEdit(role)}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 dark:bg-gray-700 hover:bg-green-50 dark:hover:bg-green-900/20 text-gray-600 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-400 rounded-lg transition font-bold text-xs"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    Permissions
-                  </button>
-                </div>
+                )}
               </div>
             </div>
           ))}
@@ -276,7 +260,6 @@ export function Roles() {
               <thead className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Role Name</th>
-                  <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Base Template</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Description</th>
                   <th className="px-6 py-3 text-center text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3 text-center text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
@@ -293,11 +276,6 @@ export function Roles() {
                         <span className="text-sm font-bold text-gray-900 dark:text-white">{role.name}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-gray-600 dark:text-gray-400 capitalize bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded font-medium">
-                        {role.base_role}
-                      </span>
-                    </td>
                     <td className="px-6 py-4">
                       <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-1 truncate max-w-xs">
                         {role.description || '-'}
@@ -305,8 +283,9 @@ export function Roles() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-center">
                       <button
-                        onClick={() => handleToggleActive(role)}
-                        className={`inline-flex px-2 py-1 text-[10px] font-black uppercase tracking-tighter rounded border ${
+                        onClick={() => hasPermission('roles', 'edit') && handleToggleActive(role)}
+                        disabled={!hasPermission('roles', 'edit')}
+                        className={`inline-flex px-2 py-1 text-[10px] font-black uppercase tracking-tighter rounded border ${!hasPermission('roles', 'edit') ? 'cursor-default opacity-80 ' : ''}${
                           role.is_active
                             ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-800 dark:text-green-400'
                             : 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400'
@@ -316,13 +295,15 @@ export function Roles() {
                       </button>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-center">
-                      <button 
-                        onClick={() => handleEdit(role)}
-                        className="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition"
-                        title="Edit Permissions"
-                      >
-                        <Lock className="w-4 h-4" />
-                      </button>
+                      {hasPermission('roles', 'edit') && (
+                        <button 
+                          onClick={() => handleEdit(role)}
+                          className="p-2 text-gray-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition"
+                          title="Edit Permissions"
+                        >
+                          <Lock className="w-4 h-4" />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -345,7 +326,7 @@ export function Roles() {
                     {editingRole ? 'Edit Role Permissions' : 'Create New Role'}
                   </h2>
                   <p className="text-xs text-gray-500 font-bold uppercase tracking-wider">
-                    {editingRole ? `Configuring: ${editingRole.name}` : 'Setup base role and permissions'}
+                    {editingRole ? `Configuring: ${editingRole.name}` : 'Setup custom role and permissions'}
                   </p>
                 </div>
               </div>
@@ -359,33 +340,16 @@ export function Roles() {
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-gray-100 dark:border-gray-700">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-black text-gray-400 uppercase tracking-wider mb-1.5">Role Name *</label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      placeholder="e.g. Senior Medical Officer"
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-semibold transition"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-black text-gray-400 uppercase tracking-wider mb-1.5">Base Template role *</label>
-                    <select
-                      value={formData.base_role}
-                      onChange={(e) => setFormData({ ...formData, base_role: e.target.value })}
-                      className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-semibold transition"
-                      required
-                    >
-                      <option value="doctor">Doctor</option>
-                      <option value="nurse">Nurse</option>
-                      <option value="receptionist">Receptionist</option>
-                      <option value="accountant">Accountant</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-xs font-black text-gray-400 uppercase tracking-wider mb-1.5">Role Name *</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="e.g. Senior Medical Officer"
+                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-semibold transition"
+                    required
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-black text-gray-400 uppercase tracking-wider mb-1.5">Description</label>
@@ -393,8 +357,8 @@ export function Roles() {
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     placeholder="Briefly describe the responsibilities..."
-                    className="w-full h-[118px] px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-semibold transition resize-none"
-                    rows={4}
+                    className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-semibold transition resize-none"
+                    rows={2}
                   />
                 </div>
               </div>

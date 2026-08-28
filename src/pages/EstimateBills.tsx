@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAllPatients } from '../utils/patientUtils';
 import { 
     Plus, Search, CreditCard, Trash2, X, 
     ChevronLeft, ChevronRight, Printer,
@@ -68,6 +69,7 @@ export function EstimateBills() {
     const [isConverting, setIsConverting] = useState(false);
     const [showPrintView, setShowPrintView] = useState(false);
     const [selectedBillForPrint, setSelectedBillForPrint] = useState<PatientBill | null>(null);
+    const [estimateIdFromUrl, setEstimateIdFromUrl] = useState<string | null>(null);
     const [filterMethod, setFilterMethod] = useState('all');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
@@ -94,6 +96,12 @@ export function EstimateBills() {
             loadProcedures();
             loadBranch();
             loadMedicalAids();
+        }
+
+        // Check if URL is /estimates/invoice/{id} — restore estimate print view on refresh
+        const pathParts = window.location.pathname.split('/');
+        if (pathParts[1] === 'estimates' && pathParts[2] === 'invoice' && pathParts[3]) {
+            setEstimateIdFromUrl(pathParts[3]);
         }
     }, [profile]);
 
@@ -131,17 +139,32 @@ export function EstimateBills() {
     const loadBills = async () => {
         try {
             setLoading(true);
-            const { data, error } = await supabase
-                .from('estimate_bills')
-                .select(`
-                    *,
-                    patient:patients(full_name, patient_number, medical_aid_id, email, medical_aid:medical_aids(name)),
-                    estimate_bill_items(*)
-                `)
-                .order('created_at', { ascending: false });
+            let allEstimates: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
+            while (true) {
+                let query = supabase
+                    .from('estimate_bills')
+                    .select(`
+                        *,
+                        patient:patients(full_name, patient_number, medical_aid_id, email, medical_aid:medical_aids(name)),
+                        estimate_bill_items(*)
+                    `)
+                    .order('created_at', { ascending: false })
+                    .range(from, from + pageSize - 1);
 
-            if (error) throw error;
-            setBills(data || []);
+                if (profile?.role !== 'super_admin' && profile?.branch_id) {
+                    query = query.eq('branch_id', profile.branch_id);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allEstimates = allEstimates.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
+            }
+            setBills(allEstimates);
         } catch (error) {
             console.error('Error loading bills:', error);
         } finally {
@@ -150,7 +173,11 @@ export function EstimateBills() {
     };
 
     const loadPatients = async () => {
-        const { data } = await supabase.from('patients').select('id, full_name, patient_number, medical_aid_id').eq('status', 'active');
+        const data = await fetchAllPatients({
+            branchId: profile?.branch_id,
+            select: 'id, full_name, patient_number, medical_aid_id',
+            activeOnly: true
+        });
         setPatients(data || []);
     };
 
@@ -549,15 +576,34 @@ export function EstimateBills() {
         if (fullBill) {
             setSelectedBillForPrint(fullBill);
             setShowPrintView(true);
+            window.history.pushState({}, '', `/estimates/invoice/${fullBill.id}`);
         }
     };
+
+    const closeEstimatePrint = () => {
+        setShowPrintView(false);
+        setSelectedBillForPrint(null);
+        window.history.pushState({}, '', '/estimates');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+    };
+
+    // Auto-restore estimate view from URL on refresh
+    useEffect(() => {
+        if (!estimateIdFromUrl || bills.length === 0) return;
+        const match = bills.find(b => b.id === estimateIdFromUrl);
+        if (match) {
+            setSelectedBillForPrint(match);
+            setShowPrintView(true);
+            setEstimateIdFromUrl(null);
+        }
+    }, [estimateIdFromUrl, bills]);
 
     if (showPrintView && selectedBillForPrint && branch) {
         return (
             <EstimatePrintView 
                 data={selectedBillForPrint} 
                 branch={branch} 
-                onBack={() => setShowPrintView(false)} 
+                onBack={closeEstimatePrint} 
             />
         );
     }

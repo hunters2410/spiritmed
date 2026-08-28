@@ -73,22 +73,32 @@ export function Expenses() {
         setLoading(true);
         try {
             const bid = profile?.branch_id;
-            let query = supabase
-                .from('expenses')
-                .select(`
-                    *,
-                    category:expense_categories(name),
-                    recorder:users!expenses_recorded_by_fkey(full_name)
-                `)
-                .order('expense_date', { ascending: false });
+            let allExpenses: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
+            while (true) {
+                let query = supabase
+                    .from('expenses')
+                    .select(`
+                        *,
+                        category:expense_categories(name),
+                        recorder:users!expenses_recorded_by_fkey(full_name)
+                    `)
+                    .order('expense_date', { ascending: false })
+                    .range(from, from + pageSize - 1);
 
-            if (bid) {
-                query = query.eq('branch_id', bid);
+                if (bid) {
+                    query = query.eq('branch_id', bid);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allExpenses = allExpenses.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
             }
-
-            const { data, error } = await query;
-            if (error) throw error;
-            setExpenses(data || []);
+            setExpenses(allExpenses);
         } catch (err: any) {
             console.error('Error loading expenses:', err);
         } finally {
@@ -99,18 +109,28 @@ export function Expenses() {
     async function loadCategories() {
         try {
             const bid = profile?.branch_id;
-            let query = supabase
-                .from('expense_categories')
-                .select('id, name')
-                .order('name', { ascending: true });
+            let allCats: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
+            while (true) {
+                let query = supabase
+                    .from('expense_categories')
+                    .select('id, name')
+                    .order('name', { ascending: true })
+                    .range(from, from + pageSize - 1);
 
-            if (bid) {
-                query = query.eq('branch_id', bid);
+                if (bid) {
+                    query = query.eq('branch_id', bid);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allCats = allCats.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
             }
-
-            const { data, error } = await query;
-            if (error) throw error;
-            setCategories(data || []);
+            setCategories(allCats);
         } catch (err: any) {
             console.error('Error loading categories:', err);
         }
@@ -209,13 +229,14 @@ export function Expenses() {
     };
 
     const handleExportExcel = () => {
-        const data = filtered.map(e => ({
-            'Date': e.expense_date,
-            'Category': e.category?.name || 'Uncategorized',
-            'Description': e.description,
-            'Amount': e.amount,
-            'Method': e.payment_method.toUpperCase(),
-            'Recorded By': e.recorder?.full_name || 'N/A'
+        const data = filtered.map((e, i) => ({
+            '#': i + 1,
+            'Date': e.expense_date ? new Date(e.expense_date).toLocaleDateString() : 'N/A',
+            'Category': (typeof e.category === 'object' ? e.category?.name : e.category) || 'Uncategorized',
+            'Description': e.description || 'N/A',
+            'Amount ($)': e.amount || 0,
+            'Payment Method': (e.payment_method || 'cash').toUpperCase(),
+            'Recorded By': e.recorder?.full_name || 'System'
         }));
         exportToExcel(data, 'hospital_expenses');
     };
@@ -224,28 +245,30 @@ export function Expenses() {
         const headers = ['#', 'Date', 'Category', 'Description', 'Amount', 'Method'];
         const data = filtered.map((e, i) => [
             i + 1,
-            e.expense_date,
-            e.category?.name || 'N/A',
-            e.description,
-            `$${e.amount.toLocaleString()}`,
-            e.payment_method.toUpperCase()
+            e.expense_date ? new Date(e.expense_date).toLocaleDateString() : 'N/A',
+            (typeof e.category === 'object' ? e.category?.name : e.category) || 'N/A',
+            e.description || 'N/A',
+            `$${(e.amount || 0).toLocaleString()}`,
+            (e.payment_method || 'cash').toUpperCase()
         ]);
         exportToPDF(headers, data, 'Hospital Expense Report', 'hospital_expenses');
     };
 
     const filtered = expenses.filter(e => {
-        const matchesSearch = e.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (e.category?.name || '').toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesCat = filterCategory === 'all' || e.category_id === filterCategory;
-        const eDate = new Date(e.expense_date);
-        const matchesStart = !startDate || eDate >= new Date(startDate);
-        const matchesEnd = !endDate || eDate <= new Date(endDate);
+        const desc = e.description || '';
+        const catName = (typeof e.category === 'object' ? e.category?.name : e.category) || '';
+        const matchesSearch = desc.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            catName.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesCat = filterCategory === 'all' || e.category_id === filterCategory || e.category === filterCategory;
+        const eDate = e.expense_date ? new Date(e.expense_date) : null;
+        const matchesStart = !startDate || (eDate && eDate >= new Date(startDate));
+        const matchesEnd = !endDate || (eDate && eDate <= new Date(endDate));
         return matchesSearch && matchesCat && matchesStart && matchesEnd;
     });
 
     const totalPages = Math.ceil(filtered.length / itemsPerPage);
     const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-    const totalAmount = filtered.reduce((sum, e) => sum + e.amount, 0);
+    const totalAmount = filtered.reduce((sum, e) => sum + (e.amount || 0), 0);
 
     return (
         <div className="space-y-6">
@@ -316,17 +339,17 @@ export function Expenses() {
                                 <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-500">No records found matching your filters</td></tr>
                             ) : paginated.map(e => (
                                 <tr key={e.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/30 transition-colors">
-                                    <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">{new Date(e.expense_date).toLocaleDateString()}</td>
+                                    <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">{e.expense_date ? new Date(e.expense_date).toLocaleDateString() : 'N/A'}</td>
                                     <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">
-                                        <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs font-semibold text-gray-600 dark:text-gray-400">{e.category?.name || 'Uncategorized'}</span>
+                                        <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs font-semibold text-gray-600 dark:text-gray-400">{(typeof e.category === 'object' ? e.category?.name : e.category) || 'Uncategorized'}</span>
                                     </td>
                                     <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">
-                                        <div className="font-medium text-gray-900 dark:text-white">{e.description}</div>
-                                        <div className="text-[10px] text-gray-400 mt-1 uppercase font-bold">Recorded By: {e.recorder?.full_name || 'N/A'}</div>
+                                        <div className="font-medium text-gray-900 dark:text-white">{e.description || 'N/A'}</div>
+                                        <div className="text-[10px] text-gray-400 mt-1 uppercase font-bold">Recorded By: {e.recorder?.full_name || 'System'}</div>
                                     </td>
-                                    <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top font-bold text-blue-600">${e.amount.toLocaleString()}</td>
+                                    <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top font-bold text-blue-600">${(e.amount || 0).toLocaleString()}</td>
                                     <td className="px-6 py-4 border-r border-gray-200 dark:border-gray-700 align-top">
-                                        <div className="capitalize">{e.payment_method.replace('_', ' ')}</div>
+                                        <div className="capitalize">{(e.payment_method || 'cash').replace('_', ' ')}</div>
                                     </td>
                                     <td className="px-6 py-4 align-top">
                                         <div className="flex justify-center">

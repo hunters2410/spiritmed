@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Plus, Search, CreditCard, Banknote, Wallet, X, Printer, Calendar, Filter, ChevronLeft, ChevronRight, FileSpreadsheet, FileJson, Pencil, Trash2 } from 'lucide-react';
 import { logActivity } from '../utils/auditLogger';
+import { formatFileNumber, formatPatientNumber } from '../utils/patientUtils';
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 import { ReceiptPrintView } from '../components/ReceiptPrintView';
 import { ApprovalGate, RequestEditModal } from '../components/ApprovalGate';
 import { approvalService, EditApprovalRequest } from '../utils/approvalService';
 import { smsService } from '../utils/smsService';
+import { emailService } from '../utils/emailService';
 import { useToast } from '../contexts/ToastContext';
 import { accountingSync } from '../utils/accountingSync';
 
@@ -47,6 +49,7 @@ interface Payment {
         patient: {
             full_name: string;
             patient_number: string;
+            file_number?: string;
             email?: string;
             medical_aid_id?: string | null;
             total_cumulative_balance?: number;
@@ -78,20 +81,29 @@ interface SimpleBill {
     };
 }
 
+// Server-side pagination: we no longer cache all payments in memory.
+// Only the current page of data is held in state.
+
 export function Payments() {
     const { profile } = useAuth();
     const { showToast } = useToast();
     const [payments, setPayments] = useState<Payment[]>([]);
+    const [totalPaymentCount, setTotalPaymentCount] = useState(0);
     const [bills, setBills] = useState<SimpleBill[]>([]);
     const [medicalAids, setMedicalAids] = useState<MedicalAid[]>([]);
     const [filterMedicalAid, setFilterMedicalAid] = useState('all');
     const [loading, setLoading] = useState(true);
+    const [loadedCount, setLoadedCount] = useState(0);
     const [showModal, setShowModal] = useState(false);
     const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
     const [showPrintView, setShowPrintView] = useState(false);
     const [selectedPaymentForPrint, setSelectedPaymentForPrint] = useState<Payment | null>(null);
+    const [receiptIdFromUrl, setReceiptIdFromUrl] = useState<string | null>(null);
     const [branch, setBranch] = useState<Branch | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const hasLoadedOnce = useRef(false);
     const [filterMethod, setFilterMethod] = useState('all');
     const [filterDebtors, setFilterDebtors] = useState(false);
     const [startDate, setStartDate] = useState('');
@@ -119,20 +131,42 @@ export function Payments() {
         notes: ''
     });
 
+    // Debounce search input
+    const handleSearchChange = useCallback((value: string) => {
+        setSearchQuery(value);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = setTimeout(() => {
+            setDebouncedSearch(value);
+            setCurrentPage(1);
+        }, 300);
+    }, []);
+
+    // Initial data load (non-paginated reference data)
     useEffect(() => {
-        loadPayments();
+        if (!profile) return;
         loadUnpaidBills();
         loadBranch();
         loadMedicalAids();
 
-        // Check for billId in URL
+        // Check for billId in URL query param
         const params = new URLSearchParams(window.location.search);
         const billId = params.get('billId');
         if (billId) {
             setFormData(prev => ({ ...prev, bill_id: billId }));
             setShowModal(true);
         }
+
+        // Check if URL is /payments/receipt/{id} — restore receipt view on refresh
+        const pathParts = window.location.pathname.split('/');
+        if (pathParts[1] === 'payments' && pathParts[2] === 'receipt' && pathParts[3]) {
+            setReceiptIdFromUrl(pathParts[3]);
+        }
     }, [profile]);
+
+    // Re-fetch page whenever page, search, or filters change
+    useEffect(() => {
+        if (profile) loadPayments();
+    }, [currentPage, debouncedSearch, filterMethod, filterDebtors, startDate, endDate, filterMedicalAid, itemsPerPage, profile]);
 
     const loadBranch = async () => {
         if (!profile?.branch_id) return;
@@ -161,7 +195,33 @@ export function Payments() {
             console.error('Error loading medical aids:', error);
         }
     };
-    
+    // Auto-open receipt when URL contains a receipt ID (handles browser refresh)
+    useEffect(() => {
+        if (!receiptIdFromUrl || payments.length === 0) return;
+        const match = payments.find(p => p.id === receiptIdFromUrl);
+        if (match) {
+            setSelectedPaymentForPrint(match);
+            setShowPrintView(true);
+            setReceiptIdFromUrl(null); // consumed
+        }
+    }, [receiptIdFromUrl, payments]);
+
+    // Open a receipt and update the URL
+    const openReceiptView = (payment: Payment) => {
+        setSelectedPaymentForPrint(payment);
+        setShowPrintView(true);
+        window.history.pushState({}, '', `/payments/receipt/${payment.id}`);
+    };
+
+    // Close receipt and restore URL
+    const closeReceiptView = () => {
+        setShowPrintView(false);
+        setSelectedPaymentForPrint(null);
+        window.history.pushState({}, '', '/payments');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+    };
+
+
     const handleTimeRangeChange = (range: string) => {
         setTimeRange(range);
         if (range === 'all') {
@@ -179,31 +239,55 @@ export function Payments() {
         setCurrentPage(1);
     };
 
-    const loadPayments = async () => {
+
+    const loadPayments = async (forceRefresh = false) => {
+        if (!profile) return;
+        // Show skeleton on first load; subtle indicator on subsequent fetches
+        if (!hasLoadedOnce.current) { setLoading(true); } else { setLoadedCount(-1); }
+
         try {
+            const from = (currentPage - 1) * itemsPerPage;
+            const to = from + itemsPerPage - 1;
+
             let query = supabase
                 .from('payments')
                 .select(`
-          *,
-          bill:bills(
-            bill_number,
-            total_amount,
-            paid_amount,
-            balance,
-            shortfall_amount,
-            medical_aid_amount,
-            shortfall_balance,
-            medical_aid_balance,
-            patient:patients(full_name, patient_number, email, medical_aid_id, outstanding_balance, medical_aid:medical_aids(id, name))
-          )
-        `)
-                .order('payment_date', { ascending: false });
+                  id, bill_id, amount, payment_method, payment_date, discount_amount, target_portion, notes, branch_id,
+                  bill:bills(
+                    bill_number,
+                    total_amount,
+                    paid_amount,
+                    balance,
+                    payment_method,
+                    shortfall_amount,
+                    medical_aid_amount,
+                    shortfall_balance,
+                    medical_aid_balance,
+                    bill_items!bill_items_bill_id_fkey(id, description, quantity, unit_price, total_price),
+                    patient:patients(full_name, patient_number, file_number, email, medical_aid_id, outstanding_balance, medical_aid:medical_aids(id, name))
+                  )
+                `, { count: 'exact' })
+                .order('payment_date', { ascending: false })
+                .range(from, to);
 
-            if (profile?.role !== 'super_admin' && profile?.branch_id) {
+            if (profile.role !== 'super_admin' && profile.branch_id) {
                 query = query.eq('branch_id', profile.branch_id);
             }
 
-            const { data, error } = await query;
+            // Server-side filters
+            if (filterMethod !== 'all') {
+                query = query.eq('payment_method', filterMethod);
+            }
+            if (startDate) {
+                query = query.gte('payment_date', startDate);
+            }
+            if (endDate) {
+                const endDatePlusOne = new Date(endDate);
+                endDatePlusOne.setDate(endDatePlusOne.getDate() + 1);
+                query = query.lt('payment_date', endDatePlusOne.toISOString().split('T')[0]);
+            }
+
+            const { data, error, count } = await query;
             if (error) throw error;
             
             const structuredData = (data || []).map((p: any) => ({
@@ -218,6 +302,8 @@ export function Payments() {
             }));
 
             setPayments(structuredData);
+            setTotalPaymentCount(count || 0);
+            hasLoadedOnce.current = true;
         } catch (error) {
             console.error('Error loading payments:', error);
         } finally {
@@ -229,6 +315,7 @@ export function Payments() {
         const data = filteredPayments.map(p => ({
             'Date': new Date(p.payment_date).toLocaleString(),
             'Patient': p.bill?.patient?.full_name,
+            'File No': p.bill?.patient?.file_number ? p.bill.patient.file_number.split('-')[0] : 'NO FILE',
             'INV #': p.bill?.bill_number,
             'Amount': p.amount,
             'Method': p.payment_method === 'medical_aid' ? (p.bill?.patient?.medical_aid?.name || 'Medical Aid') : (p.payment_method === 'standard' ? 'Cash' : p.payment_method),
@@ -238,11 +325,12 @@ export function Payments() {
     };
 
     const handleExportPDF = () => {
-        const headers = ['#', 'Date', 'Patient', 'Bill', 'Amount', 'Method'];
+        const headers = ['#', 'Date', 'Patient', 'File No', 'Bill', 'Amount', 'Method'];
         const data = filteredPayments.map((p, i) => [
             i + 1,
             new Date(p.payment_date).toLocaleDateString(),
             p.bill?.patient?.full_name || 'N/A',
+            p.bill?.patient?.file_number ? p.bill.patient.file_number.split('-')[0] : 'NO FILE',
             p.bill?.bill_number,
             `$${p.amount.toLocaleString()}`,
             p.payment_method === 'medical_aid' ? (p.bill?.patient?.medical_aid?.name || 'MEDICAL AID') : (p.payment_method === 'standard' ? 'CASH' : p.payment_method.toUpperCase())
@@ -252,31 +340,44 @@ export function Payments() {
 
     const loadUnpaidBills = async () => {
         try {
-            let query = supabase
-                .from('bills')
-                .select(`
-          id, 
-          patient_id,
-          bill_number, 
-          total_amount, 
-          paid_amount,
-          balance,
-          shortfall_amount,
-          medical_aid_amount,
-          shortfall_balance,
-          medical_aid_balance,
-          status,
-          patient:patients(full_name, medical_aid:medical_aids(id, name))
-        `)
-                .in('status', ['unpaid', 'partially_paid']);
+            let allBills: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
 
-            if (profile?.role !== 'super_admin' && profile?.branch_id) {
-                query = query.eq('branch_id', profile.branch_id);
+            while (true) {
+                let query = supabase
+                    .from('bills')
+                    .select(`
+                      id, 
+                      patient_id,
+                      bill_number, 
+                      total_amount, 
+                      paid_amount,
+                      balance,
+                      shortfall_amount,
+                      medical_aid_amount,
+                      shortfall_balance,
+                      medical_aid_balance,
+                      status,
+                      patient:patients(full_name, patient_number, file_number, medical_aid:medical_aids(id, name))
+                    `)
+                    .in('status', ['unpaid', 'partially_paid'])
+                    .order('created_at', { ascending: false })
+                    .range(from, from + pageSize - 1);
+
+                if (profile?.role !== 'super_admin' && profile?.branch_id) {
+                    query = query.eq('branch_id', profile.branch_id);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allBills = allBills.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
             }
 
-            const { data, error } = await query;
-            if (error) throw error;
-            setBills((data || []) as unknown as SimpleBill[]);
+            setBills(allBills as unknown as SimpleBill[]);
         } catch (error) {
             console.error('Error loading invoices:', error);
         }
@@ -434,12 +535,7 @@ export function Payments() {
             const selectedBill = bills.find(inv => inv.id === formData.bill_id);
             if (!selectedBill && !editingPaymentId) throw new Error('Selected bill not found');
 
-            // Overpayment guard (create only)
-            if (!editingPaymentId && selectedBill) {
-                if (amount > (selectedBill.balance || 0) + 0.01) {
-                    throw new Error(`Payment amount ($${amount.toLocaleString()}) exceeds the remaining bill balance ($${(selectedBill.balance || 0).toLocaleString()})`);
-                }
-            }
+            // Overpayments are allowed — a negative balance means credit on the account
 
             let paymentData: any;
             let paymentError: any;
@@ -463,7 +559,7 @@ export function Payments() {
                 const newTotalAmount = Math.max(0, (currentBill.total_amount || 0) - discountDiff);
                 const newDiscountAmount = Math.max(0, (currentBill.discount_amount || 0) + discountDiff);
                 const newPaidAmount = (currentBill.paid_amount || 0) + amountDiff;
-                const newBalance = Math.max(0, newTotalAmount - newPaidAmount);
+                const newBalance = newTotalAmount - newPaidAmount;
                 const newStatus = newBalance <= 0 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'unpaid';
 
                 // Revert old payment influence
@@ -559,7 +655,8 @@ export function Payments() {
                     const newTotalAmount = Math.max(0, (selectedBill!.total_amount || 0) - discount);
                     const newDiscountAmount = (selectedBill!.discount_amount || 0) + discount;
                     const newPaidAmount = (selectedBill!.paid_amount || 0) + amount;
-                    const newBalance = Math.max(0, newTotalAmount - newPaidAmount);
+                    // Allow negative balance (credit/overpayment)
+                    const newBalance = newTotalAmount - newPaidAmount;
                     
                     let newStatus = newBalance <= 0 ? 'paid' : newPaidAmount > 0 ? 'partially_paid' : 'unpaid';
 
@@ -579,17 +676,17 @@ export function Payments() {
                     const isSplitBill = (selectedBill!.medical_aid_amount || 0) > 0;
 
                     if (formData.target_portion === 'shortfall') {
-                        // Shortfall payment: both amount and discount reduce the shortfall balance
-                        newShortfallBalance = Math.max(0, newShortfallBalance - (amount + discount));
+                        // Allow negative (overpayment credit)
+                        newShortfallBalance = newShortfallBalance - (amount + discount);
                     } else {
                         // Medical Aid payment: amount reduces MA balance
                         // Discount ALWAYS goes to patient shortfall on split bills
-                        newMedicalAidBalance = Math.max(0, newMedicalAidBalance - amount);
+                        newMedicalAidBalance = newMedicalAidBalance - amount;
                         if (isSplitBill) {
-                            newShortfallBalance = Math.max(0, newShortfallBalance - discount);
+                            newShortfallBalance = newShortfallBalance - discount;
                         } else {
                             // Patient-only bill: discount reduces MA balance (no split)
-                            newMedicalAidBalance = Math.max(0, newMedicalAidBalance - discount);
+                            newMedicalAidBalance = newMedicalAidBalance - discount;
                         }
                     }
 
@@ -619,6 +716,22 @@ export function Payments() {
                            patientId: selectedBill!.patient_id
                        });
                     }
+
+                    // SEND EMAIL: Payment Received
+                    if (patient && (patient as any).email && profile?.branch_id) {
+                       await emailService.sendEmail({
+                           recipientEmail: (patient as any).email,
+                           recipientName: patient.full_name,
+                           triggerType: 'payment_received',
+                           placeholders: {
+                               patient_name: patient.full_name,
+                               amount: amount.toLocaleString(),
+                               bill_number: selectedBill!.bill_number,
+                               balance: newBalance.toLocaleString()
+                           },
+                           branchId: profile.branch_id
+                       });
+                    }
                 }
             }
 
@@ -642,7 +755,7 @@ export function Payments() {
 
             setShowModal(false);
             resetForm();
-            loadPayments();
+            loadPayments(true);
             loadUnpaidBills();
             showToast(editingPaymentId ? 'Payment updated successfully!' : 'Payment recorded successfully!');
         } catch (error: any) {
@@ -668,35 +781,41 @@ export function Payments() {
         setIsDropdownOpen(false);
     };
 
-    const filteredPayments = useMemo(() => payments.filter(p => {
-        const matchesSearch = (p.bill?.patient?.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (p.bill?.bill_number || '').toLowerCase().includes(searchQuery.toLowerCase());
-        
-        const matchesMethod = filterMethod === 'all' || p.payment_method === filterMethod;
-        const matchesDebtor = !filterDebtors || (p.bill?.patient?.total_cumulative_balance || 0) > 0;
-        
-        const payDate = new Date(p.payment_date);
-        const matchesStartDate = !startDate || payDate >= new Date(startDate);
-        const matchesEndDate = !endDate || payDate <= new Date(endDate);
-        const matchesMedicalAid = filterMedicalAid === 'all' || p.bill?.patient?.medical_aid_id === filterMedicalAid;
-
-        return matchesSearch && matchesMethod && matchesDebtor && matchesStartDate && matchesEndDate && matchesMedicalAid;
-    }), [payments, searchQuery, filterMethod, filterDebtors, startDate, endDate, filterMedicalAid]);
+    // Client-side secondary filters (search + debtor + medical aid applied on the already-paginated data)
+    const filteredPayments = useMemo(() => {
+        let result = payments;
+        if (debouncedSearch.trim()) {
+            const q = debouncedSearch.toLowerCase();
+            result = result.filter(p =>
+                (p.bill?.patient?.full_name || '').toLowerCase().includes(q) ||
+                (p.bill?.bill_number || '').toLowerCase().includes(q) ||
+                (p.bill?.patient?.file_number || '').toLowerCase().includes(q)
+            );
+        }
+        if (filterDebtors) {
+            result = result.filter(p => (p.bill?.patient?.total_cumulative_balance || 0) > 0);
+        }
+        if (filterMedicalAid !== 'all') {
+            result = result.filter(p => p.bill?.patient?.medical_aid_id === filterMedicalAid);
+        }
+        return result;
+    }, [payments, debouncedSearch, filterDebtors, filterMedicalAid]);
 
     const filteredBills = useMemo(() => bills.filter(inv => 
         inv.bill_number.toLowerCase().includes(billSearch.toLowerCase()) ||
         inv.patient?.full_name.toLowerCase().includes(billSearch.toLowerCase())
     ), [bills, billSearch]);
 
-    const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
-    const paginated = filteredPayments.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+    const totalPages = Math.ceil(totalPaymentCount / itemsPerPage);
+    // Data is already paginated from the server — use directly
+    const paginated = filteredPayments;
 
     if (showPrintView && selectedPaymentForPrint && branch) {
         return (
             <ReceiptPrintView 
                 data={selectedPaymentForPrint} 
                 branch={branch} 
-                onBack={() => setShowPrintView(false)} 
+                onBack={closeReceiptView} 
             />
         );
     }
@@ -743,7 +862,7 @@ export function Payments() {
                             type="text"
                             placeholder="Search Patients..."
                             value={searchQuery}
-                            onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                            onChange={(e) => handleSearchChange(e.target.value)}
                             className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-xs outline-none focus:ring-2 focus:ring-cyan-500 transition-all font-medium"
                         />
                     </div>
@@ -872,6 +991,7 @@ export function Payments() {
                             <tr>
                                 <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Date</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Patient</th>
+                                <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">File No</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">INV #</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-right text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Bill Total</th>
                                 <th className="border border-gray-200 dark:border-gray-700 px-4 py-3 text-right text-xs font-bold text-cyan-600 uppercase tracking-wider">Payment</th>
@@ -883,8 +1003,14 @@ export function Payments() {
                             </tr>
                         </thead>
                         <tbody>
-                            {filteredPayments.length === 0 ? (
-                                <tr><td colSpan={10} className="border border-gray-200 dark:border-gray-700 px-5 py-16 text-center text-sm font-medium text-gray-400">No payments found</td></tr>
+                            {loading ? (
+                                <tr>
+                                    <td colSpan={11} className="border border-gray-200 dark:border-gray-700 px-6 py-10 text-center">
+                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600 mx-auto" />
+                                    </td>
+                                </tr>
+                            ) : filteredPayments.length === 0 ? (
+                                <tr><td colSpan={11} className="border border-gray-200 dark:border-gray-700 px-5 py-16 text-center text-sm font-medium text-gray-400">No payments found</td></tr>
                             ) : (
                                 paginated.map((p) => (
                                     <tr key={p.id} className="hover:bg-cyan-50/40 dark:hover:bg-cyan-900/10 transition">
@@ -894,16 +1020,24 @@ export function Payments() {
                                         </td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5">
                                             <div className="text-sm font-semibold text-gray-900 dark:text-white">{p.bill?.patient?.full_name}</div>
-                                            <div className="text-xs text-gray-400 font-mono">{p.bill?.patient?.patient_number}</div>
+                                            <div className="text-xs text-blue-600 font-mono">{formatPatientNumber(p.bill?.patient?.patient_number)}</div>
+                                        </td>
+                                        <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                            {p.bill?.patient?.file_number ? formatFileNumber(p.bill.patient.file_number) : <span className="text-gray-400 font-normal">NO FILE</span>}
                                         </td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">{p.bill?.bill_number}</td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right text-sm font-semibold text-gray-600 dark:text-gray-300">${(p.bill?.total_amount || 0).toLocaleString()}</td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right"><span className="text-sm font-bold text-cyan-600">${p.amount.toLocaleString()}</span></td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right"><span className="text-sm font-semibold text-amber-600">${(p.discount_amount || 0).toLocaleString()}</span></td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-right">
-                                            {(p.bill?.balance || 0) > 0
-                                                ? <span className="text-sm font-bold text-orange-600">${(p.bill?.balance || 0).toLocaleString()}</span>
-                                                : <span className="text-sm font-bold text-green-600">Settled</span>}
+                                            {(() => {
+                                                const stored = p.bill?.balance ?? 0;
+                                                const paid = p.bill?.paid_amount ?? 0;
+                                                const eff = stored > 0 ? stored : Math.max(0, (p.bill?.total_amount || 0) - paid);
+                                                return eff > 0
+                                                    ? <span className="text-sm font-bold text-orange-600">${eff.toLocaleString()}</span>
+                                                    : <span className="text-sm font-bold text-green-600">Settled</span>;
+                                            })()}
                                         </td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5">
                                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 uppercase border border-gray-200">
@@ -914,7 +1048,7 @@ export function Payments() {
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-sm text-gray-500 dark:text-gray-400 max-w-[160px] truncate">{p.notes || '—'}</td>
                                         <td className="border border-gray-200 dark:border-gray-700 px-4 py-2.5">
                                             <div className="flex items-center justify-center gap-1">
-                                                <button onClick={() => { setSelectedPaymentForPrint(p); setShowPrintView(true); }} className="p-1.5 text-gray-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-md transition" title="Print"><Printer className="w-4 h-4" /></button>
+                                                <button onClick={() => openReceiptView(p)} className="p-1.5 text-gray-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-md transition" title="Print"><Printer className="w-4 h-4" /></button>
                                                 {profile?.role === 'admin' && (<>
                                                     <button onClick={() => handleEditPayment(p)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition" title="Edit"><Pencil className="w-4 h-4" /></button>
                                                     <button onClick={() => handleDeletePayment(p)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
@@ -933,16 +1067,16 @@ export function Payments() {
                     <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
                         <div className="flex items-center space-x-4">
                             <p className="text-xs text-gray-500">
-                                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredPayments.length)} of {filteredPayments.length}
+                                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, totalPaymentCount)} of {totalPaymentCount}
                             </p>
                             <div className="flex items-center space-x-2">
                                 <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
                                 <select
-                                    value={itemsPerPage === filteredPayments.length ? 'all' : itemsPerPage}
+                                    value={itemsPerPage === totalPaymentCount ? 'all' : itemsPerPage}
                                     onChange={(e) => {
                                         const val = e.target.value;
                                         if (val === 'all') {
-                                            setItemsPerPage(filteredPayments.length || 1);
+                                            setItemsPerPage(totalPaymentCount || 1);
                                         } else {
                                             setItemsPerPage(Number(val));
                                         }
@@ -959,7 +1093,7 @@ export function Payments() {
                             </div>
                         </div>
                         
-                        {itemsPerPage < filteredPayments.length && totalPages > 1 && (
+                        {totalPages > 1 && (
                             <div className="flex gap-2">
                                 <button
                                     disabled={currentPage === 1}
@@ -1112,6 +1246,32 @@ export function Payments() {
                                     </div>
                                 </div>
                             </div>
+
+                            {/* Live Overpayment / Credit indicator */}
+                            {(() => {
+                                if (!formData.bill_id) return null;
+                                const selectedBill = bills.find(i => i.id === formData.bill_id);
+                                if (!selectedBill) return null;
+                                const effectiveBal = (selectedBill.balance ?? 0) > 0
+                                    ? (selectedBill.balance ?? 0)
+                                    : Math.max(0, (selectedBill.total_amount || 0) - (selectedBill.paid_amount || 0));
+                                const enteredAmt = parseFloat(formData.amount) || 0;
+                                const credit = enteredAmt - effectiveBal;
+                                if (credit <= 0) return null;
+                                return (
+                                    <div className="flex items-center gap-3 p-3 bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-700 rounded-lg">
+                                        <div className="w-7 h-7 rounded-full bg-violet-100 dark:bg-violet-800 flex items-center justify-center flex-shrink-0">
+                                            <span className="text-violet-600 font-black text-sm">↑</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase text-violet-600 tracking-widest">Overpayment / Credit</p>
+                                            <p className="text-sm font-black text-violet-700 dark:text-violet-300">
+                                                +${credit.toLocaleString(undefined, { minimumFractionDigits: 2 })} credit will be recorded on this account
+                                            </p>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                                  <div>
                                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Payment Date *</label>

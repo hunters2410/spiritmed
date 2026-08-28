@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Expo & Build artifacts
+.expo/
+dist/
+web-build/
+
+# Native folders if present
+/android
+/ios
+
+# Version control
+.git/

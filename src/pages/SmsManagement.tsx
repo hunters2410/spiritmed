@@ -59,7 +59,7 @@ export function SmsManagement() {
   const [logs, setLogs] = useState<SmsLog[]>([]);
   const [logsCount, setLogsCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState<number>(25);
 
   useEffect(() => {
     if (profile) {
@@ -67,7 +67,7 @@ export function SmsManagement() {
       loadTemplates();
       loadLogs();
     }
-  }, [profile?.id, currentPage]);
+  }, [profile?.id, currentPage, itemsPerPage]);
 
   const loadConfig = async () => {
     if (!profile?.branch_id) return; // super_admin has no branch — skip config load
@@ -476,20 +476,42 @@ export function SmsManagement() {
             </div>
 
             {/* Pagination */}
-            <div className="p-6 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
-              <p className="text-xs text-gray-500">Total Logs: {logsCount}</p>
+            <div className="p-6 border-t border-gray-100 dark:border-gray-800 flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
+              <div className="flex items-center space-x-4">
+                <p className="text-xs text-gray-500">
+                  Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, logsCount)} of {logsCount} logs
+                </p>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                  <select
+                    value={itemsPerPage === logsCount ? 'all' : itemsPerPage}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setItemsPerPage(val === 'all' ? logsCount || 1 : Number(val));
+                      setCurrentPage(1);
+                    }}
+                    className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none text-gray-700 dark:text-gray-200"
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value="all">ALL</option>
+                  </select>
+                </div>
+              </div>
               <div className="flex gap-2">
                 <button 
                   disabled={currentPage === 1}
                   onClick={() => setCurrentPage(p => p - 1)}
-                  className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"
+                  className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-30"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 <button 
                   disabled={currentPage * itemsPerPage >= logsCount}
                   onClick={() => setCurrentPage(p => p + 1)}
-                  className="p-1.5 rounded-lg border border-gray-200 disabled:opacity-30"
+                  className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-30"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </button>

@@ -37,9 +37,8 @@ export function Suppliers() {
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    /* ─── pagination state ─── */
     const [currentPage, setCurrentPage] = useState(1);
-    const itemsPerPage = 10;
+    const [itemsPerPage, setItemsPerPage] = useState<number>(25);
 
     useEffect(() => {
         loadSuppliers();
@@ -166,29 +165,51 @@ export function Suppliers() {
                     </table>
                 </div>
 
-                {totalPages > 1 && (
-                    <div className="px-6 py-4 bg-gray-50/50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                        <div className="text-xs text-gray-500 font-medium tracking-wide">
-                            Showing <span className="text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filtered.length)}</span> of <span className="text-gray-900 dark:text-white">{filtered.length}</span> records
-                        </div>
-                        <div className="flex gap-2">
-                            <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}
-                                className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-30 transition shadow-sm">
-                                <ChevronLeft className="w-4 h-4" />
-                            </button>
-                            <div className="flex gap-1">
-                                {[...Array(totalPages)].map((_, i) => (
-                                    <button key={i} onClick={() => setCurrentPage(i + 1)}
-                                        className={`w-8 h-8 rounded-lg text-xs font-bold transition shadow-sm ${currentPage === i + 1 ? 'bg-indigo-600 text-white' : 'border border-gray-300 dark:border-gray-600 hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
-                                        {i + 1}
-                                    </button>
-                                ))}
+                {filtered.length > 0 && (
+                    <div className="px-6 py-4 bg-gray-50/50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
+                        <div className="flex items-center space-x-4">
+                            <div className="text-xs text-gray-500 font-medium tracking-wide">
+                                Showing <span className="text-gray-900 dark:text-white">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filtered.length)}</span> of <span className="text-gray-900 dark:text-white">{filtered.length}</span> records
                             </div>
-                            <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}
-                                className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-30 transition shadow-sm">
-                                <ChevronRight className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center space-x-2">
+                                <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                                <select
+                                    value={itemsPerPage === filtered.length ? 'all' : itemsPerPage}
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        setItemsPerPage(val === 'all' ? filtered.length || 1 : Number(val));
+                                        setCurrentPage(1);
+                                    }}
+                                    className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none text-gray-700 dark:text-gray-200"
+                                >
+                                    <option value={10}>10</option>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                    <option value="all">ALL</option>
+                                </select>
+                            </div>
                         </div>
+                        {totalPages > 1 && (
+                            <div className="flex gap-2">
+                                <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-30 transition shadow-sm">
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                <div className="flex gap-1">
+                                    {[...Array(totalPages)].map((_, i) => (
+                                        <button key={i} onClick={() => setCurrentPage(i + 1)}
+                                            className={`w-8 h-8 rounded-lg text-xs font-bold transition shadow-sm ${currentPage === i + 1 ? 'bg-indigo-600 text-white' : 'border border-gray-300 dark:border-gray-600 hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'}`}>
+                                            {i + 1}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}
+                                    className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-white dark:hover:bg-gray-700 disabled:opacity-30 transition shadow-sm">
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -222,7 +243,7 @@ export function Suppliers() {
                                     <label className={labelCls}>Contact Person</label>
                                     <div className="relative">
                                         <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                        <input type="text" value={formData.contact_person} onChange={e => setFormData(d => ({ ...d, contact_person: e.target.value }))} className={`${inputCls} pl-10`} placeholder="e.g. John Doe" />
+                                        <input type="text" value={formData.contact_person} onChange={e => setFormData(d => ({ ...d, contact_person: e.target.value }))} className={`${inputCls} pl-10`} placeholder="Enter contact person name" />
                                     </div>
                                 </div>
                                 <div>

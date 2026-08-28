@@ -44,8 +44,8 @@ export function SearchablePatientSelect({
 
   const filteredPatients = patients.filter(p => {
     const q = search.toLowerCase();
-    const cleanPNo = p.patient_number ? p.patient_number.split('-')[0] : '';
-    const cleanFNo = p.file_number ? p.file_number.split('-')[0] : '';
+    const cleanPNo = p.patient_number ? p.patient_number : '';
+    const cleanFNo = p.file_number ? p.file_number : '';
     return (
       p.full_name.toLowerCase().includes(q) ||
       cleanPNo.toLowerCase().includes(q) ||
@@ -66,7 +66,7 @@ export function SearchablePatientSelect({
             <span className="font-bold truncate text-gray-900 dark:text-white">{selectedPatient.full_name}</span>
             {selectedPatient.patient_number && (
               <span className="text-xs font-mono text-gray-400 dark:text-gray-400 flex-shrink-0">
-                ({selectedPatient.patient_number.split('-')[0]})
+                ({selectedPatient.patient_number.split('-').pop()})
               </span>
             )}
           </div>
@@ -124,10 +124,10 @@ export function SearchablePatientSelect({
                 No patients found matching "{search}"
               </div>
             ) : (
-              filteredPatients.slice(0, 100).map((p) => {
+              filteredPatients.map((p) => {
                 const isSelected = p.id === value;
-                const cleanPNo = p.patient_number ? p.patient_number.split('-')[0] : '';
-                const cleanFNo = p.file_number ? p.file_number.split('-')[0] : '';
+                const cleanPNo = p.patient_number ? p.patient_number : '';
+                const cleanFNo = p.file_number ? p.file_number : '';
 
                 return (
                   <div
@@ -145,7 +145,7 @@ export function SearchablePatientSelect({
                         {p.full_name}
                       </div>
                       <div className="flex items-center gap-3 text-[10px] text-gray-400 font-mono mt-0.5">
-                        {cleanPNo && <span>ID: {cleanPNo}</span>}
+                        {cleanPNo && <span>ID: {cleanPNo.split('-').pop()}</span>}
                         {cleanFNo && <span>File: {cleanFNo}</span>}
                         {p.phone && <span>Tel: {p.phone}</span>}
                       </div>
@@ -154,11 +154,6 @@ export function SearchablePatientSelect({
                   </div>
                 );
               })
-            )}
-            {filteredPatients.length > 100 && (
-              <div className="px-4 py-2 text-[10px] font-bold text-gray-400 text-center bg-gray-50 dark:bg-gray-900/40">
-                Showing first 100 of {filteredPatients.length} matches. Type to narrow search.
-              </div>
             )}
           </div>
         </div>

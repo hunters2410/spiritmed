@@ -123,7 +123,7 @@ export function SearchableSelect({
                 No options found matching "{search}"
               </div>
             ) : (
-              filteredOptions.slice(0, 100).map((o) => {
+              filteredOptions.map((o) => {
                 const isSelected = o.value === value;
                 return (
                   <div
@@ -150,11 +150,6 @@ export function SearchableSelect({
                   </div>
                 );
               })
-            )}
-            {filteredOptions.length > 100 && (
-              <div className="px-4 py-2 text-[10px] font-bold text-gray-400 text-center bg-gray-50 dark:bg-gray-900/40">
-                Showing first 100 of {filteredOptions.length} matches. Type to narrow search.
-              </div>
             )}
           </div>
         </div>

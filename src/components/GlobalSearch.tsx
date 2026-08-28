@@ -164,8 +164,8 @@ export function GlobalSearch() {
             id,
             appointment_date,
             appointment_time,
-            patients:patient_id (full_name),
-            users:doctor_id (full_name)
+            patients:patient_id!left (full_name),
+            users:doctor_id!left (full_name)
           `)
           .limit(5)
           .order('appointment_date', { ascending: false });

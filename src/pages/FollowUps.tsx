@@ -31,7 +31,7 @@ export function FollowUps() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState<number>(25);
 
   useEffect(() => {
     loadFollowUps();
@@ -45,8 +45,8 @@ export function FollowUps() {
         .from('appointments')
         .select(`
           *,
-          patients (full_name, phone, patient_number),
-          users:doctor_id (full_name)
+          patients!left (full_name, phone, patient_number),
+          users:doctor_id!left (full_name)
         `)
         .eq('branch_id', profile.branch_id)
         .eq('appointment_type', 'follow_up')
@@ -64,7 +64,7 @@ export function FollowUps() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'confirmed': return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">Confirmed</span>;
-      case 'pending_confirmation': return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">Pending</span>;
+      case 'pending_confirmation': return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">Pending Confirmation</span>;
       case 'cancelled': return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">Cancelled</span>;
       default: return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">{status}</span>;
     }
@@ -108,18 +108,18 @@ export function FollowUps() {
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <table className="w-full border-collapse text-left">
-          <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+        <table className="w-full border-collapse text-left border border-gray-200 dark:border-gray-700">
+          <thead className="bg-gray-100 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-700">
             <tr>
-              <th className="px-6 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Patient</th>
-              <th className="px-6 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Contact</th>
-              <th className="px-6 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Schedule</th>
-              <th className="px-6 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Doctor</th>
-              <th className="px-6 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
-              <th className="px-6 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+              <th className="px-6 py-3 text-xs font-black text-gray-600 dark:text-gray-300 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">Patient</th>
+              <th className="px-6 py-3 text-xs font-black text-gray-600 dark:text-gray-300 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">Contact</th>
+              <th className="px-6 py-3 text-xs font-black text-gray-600 dark:text-gray-300 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">Schedule</th>
+              <th className="px-6 py-3 text-xs font-black text-gray-600 dark:text-gray-300 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">Doctor</th>
+              <th className="px-6 py-3 text-xs font-black text-gray-600 dark:text-gray-300 uppercase tracking-wider border-b border-r border-gray-200 dark:border-gray-700">Status</th>
+              <th className="px-6 py-3 text-xs font-black text-gray-600 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
             {loading ? (
               <tr>
                 <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
@@ -135,18 +135,18 @@ export function FollowUps() {
               </tr>
             ) : (
               paginated.map((item) => (
-                <tr key={item.id} className="hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors">
-                  <td className="px-6 py-4">
+                <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors">
+                  <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
                     <div className="text-sm font-semibold text-gray-900 dark:text-white">{item.patients?.full_name}</div>
                     <div className="text-xs text-gray-400 font-mono tracking-tighter uppercase">{item.patients?.patient_number}</div>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
                     <div className="text-sm text-gray-600 dark:text-gray-400 flex items-center gap-1.5">
                       <Phone className="w-3.5 h-3.5 text-gray-400" />
                       {item.patients?.phone}
                     </div>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
                     <div className="text-sm text-gray-900 dark:text-white font-medium">
                       {new Date(item.appointment_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                     </div>
@@ -154,13 +154,13 @@ export function FollowUps() {
                       {new Date(item.appointment_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
+                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 border-b border-r border-gray-200 dark:border-gray-700">
                     {item.users?.full_name}
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 border-b border-r border-gray-200 dark:border-gray-700">
                     {getStatusBadge(item.status)}
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
                     <button className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors rounded-md hover:bg-blue-50">
                       <ExternalLink className="w-4 h-4" />
                     </button>
@@ -171,25 +171,47 @@ export function FollowUps() {
           </tbody>
         </table>
 
-        {totalPages > 1 && (
-          <div className="px-6 py-3 flex items-center justify-between border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-            <span className="text-xs font-semibold text-gray-500 uppercase">Page {currentPage} of {totalPages}</span>
-            <div className="flex space-x-2">
-              <button 
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage(p => p - 1)}
-                className="p-1 border border-gray-300 rounded hover:bg-white disabled:opacity-30 transition-all shadow-sm"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button 
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage(p => p + 1)}
-                className="p-1 border border-gray-300 rounded hover:bg-white disabled:opacity-30 transition-all shadow-sm"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+        {filtered.length > 0 && (
+          <div className="px-6 py-4 bg-gray-50/50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
+            <div className="flex items-center space-x-4">
+              <span className="text-xs text-gray-500">Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filtered.length)} of {filtered.length}</span>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                <select
+                  value={itemsPerPage === filtered.length ? 'all' : itemsPerPage}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setItemsPerPage(val === 'all' ? filtered.length || 1 : Number(val));
+                    setCurrentPage(1);
+                  }}
+                  className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none text-gray-700 dark:text-gray-200"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value="all">ALL</option>
+                </select>
+              </div>
             </div>
+            {totalPages > 1 && (
+              <div className="flex space-x-2">
+                <button 
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => p - 1)}
+                  className="p-1 border border-gray-300 rounded hover:bg-white disabled:opacity-30 transition-all shadow-sm"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button 
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => p + 1)}
+                  className="p-1 border border-gray-300 rounded hover:bg-white disabled:opacity-30 transition-all shadow-sm"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

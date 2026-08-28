@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, FileText, Pencil, Trash2, X, Eye, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { fetchAllPatients } from '../utils/patientUtils';
+import { Plus, FileText, Pencil, Trash2, X, Eye, ChevronLeft, ChevronRight, Search, Printer, Download, MessageSquare, Mail, Send, CheckCircle2 } from 'lucide-react';
 import { ClinicalDocumentPrintView } from '../components/ClinicalDocumentPrintView';
 import { SearchDropdown } from '../components/SearchDropdown';
+import { RichTextEditor } from '../components/RichTextEditor';
+import { smsService } from '../utils/smsService';
+import { logActivity } from '../utils/auditLogger';
 
 /* ─── types ─── */
 interface Patient {
@@ -12,6 +16,8 @@ interface Patient {
     patient_number: string;
     gender: string;
     date_of_birth: string;
+    phone?: string;
+    email?: string;
 }
 interface Doctor {
     id: string;
@@ -41,10 +47,13 @@ interface OperationReport {
     doctor_id: string; // Doctor
     procedure_id?: string;
     patient: {
+        id?: string;
         full_name: string;
         patient_number: string;
         gender: string;
         date_of_birth: string;
+        phone?: string;
+        email?: string;
     };
     doctor: Doctor; // Doctor
     procedure?: Procedure;
@@ -61,13 +70,41 @@ export default function OperationReports() {
     const [reports, setReports] = useState<OperationReport[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const hasLoadedOnce = useRef(false);
+    const [totalDbCount, setTotalDbCount] = useState(0);
     const [showModal, setShowModal] = useState(false);
     const [showPatientModal, setShowPatientModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'detailed'>('table');
     const [selectedDoc, setSelectedDoc] = useState<OperationReport | null>(null);
+    const [actionTrigger, setActionTrigger] = useState<'none' | 'print' | 'download'>('none');
     const [branch, setBranch] = useState<any>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(25);
+
+    const handleSearchChange = useCallback((value: string) => {
+        setSearchQuery(value);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = setTimeout(() => { setDebouncedSearch(value); setCurrentPage(1); }, 300);
+    }, []);
+
+    /* Notification Trigger States */
+    const [showSmsModal, setShowSmsModal] = useState(false);
+    const [smsTargetReport, setSmsTargetReport] = useState<OperationReport | null>(null);
+    const [smsRecipientPhone, setSmsRecipientPhone] = useState('');
+    const [smsMessage, setSmsMessage] = useState('');
+    const [sendingSms, setSendingSms] = useState(false);
+
+    const [showEmailModal, setShowEmailModal] = useState(false);
+    const [emailTargetReport, setEmailTargetReport] = useState<OperationReport | null>(null);
+    const [emailRecipient, setEmailRecipient] = useState('');
+    const [emailSubject, setEmailSubject] = useState('');
+    const [emailBody, setEmailBody] = useState('');
+    const [sendingEmail, setSendingEmail] = useState(false);
+
+    const [sendSmsOnSave, setSendSmsOnSave] = useState(false);
+    const [sendEmailOnSave, setSendEmailOnSave] = useState(false);
 
     /* Form State */
     const [form, setForm] = useState({
@@ -106,78 +143,80 @@ export default function OperationReports() {
     const [assistants, setAssistants] = useState<any[]>([]);
 
     useEffect(() => {
-        if (profile) {
-            loadAll();
-            fetchBranchDetails();
-        } else {
-            setLoading(false);
-        }
+        if (profile) { loadReferences(); fetchBranchDetails(); }
+        else { setLoading(false); }
     }, [profile?.id]);
+
+    useEffect(() => {
+        if (profile) loadRecords();
+    }, [currentPage, debouncedSearch, itemsPerPage, profile?.id]);
 
     async function fetchBranchDetails() {
         if (!profile?.branch_id) return;
-        const { data } = await supabase.from('branches').select('*').eq('id', profile?.branch_id).maybeSingle();
+        const { data } = await supabase.from('branches').select('name, logo_url, phone, email, address').eq('id', profile?.branch_id).maybeSingle();
         setBranch(data);
     }
 
-    async function loadAll() {
-        setLoading(true);
+    async function loadReferences() {
         try {
             const bid = profile?.branch_id;
-
-            let forQ = supabase.from('operation_reports').select('*, patient:patients(full_name, patient_number, gender, date_of_birth), doctor:users(full_name, specialization, qualifications, signature_url), procedure:surgical_procedures(name), hospital:hospitals(name)');
-            let patQ = supabase.from('patients').select('id, full_name, patient_number, gender, date_of_birth');
-            let hospQ = supabase.from('hospitals').select('*');
-            let anaQ = supabase.from('anaesthetists').select('*');
-            let astQ = supabase.from('assistants').select('*');
+            let hospQ = supabase.from('hospitals').select('id, name');
+            let anaQ = supabase.from('anaesthetists').select('id, full_name');
+            let astQ = supabase.from('assistants').select('id, full_name');
             let docQ = supabase.from('users').select('id, full_name').eq('role', 'doctor').eq('is_active', true);
-            let prcQ = supabase.from('surgical_procedures').select('*');
-
+            let prcQ = supabase.from('surgical_procedures').select('id, name');
             if (bid) {
-                forQ = forQ.eq('branch_id', bid);
-                patQ = patQ.eq('branch_id', bid);
                 hospQ = hospQ.eq('branch_id', bid);
                 anaQ = anaQ.eq('branch_id', bid);
                 astQ = astQ.eq('branch_id', bid);
                 docQ = docQ.eq('branch_id', bid);
                 prcQ = prcQ.eq('branch_id', bid);
             }
-
-            const [forRes, patRes, hospRes, anaRes, astRes, docRes, prcRes] = await Promise.all([
-                forQ.order('operation_date', { ascending: false }).order('created_at', { ascending: false }),
-                patQ,
-                hospQ.order('name'),
-                anaQ.order('full_name'),
-                astQ.order('full_name'),
-                docQ.order('full_name'),
-                prcQ.order('name')
+            const [allPats, hospRes, anaRes, astRes, docRes, prcRes] = await Promise.all([
+                fetchAllPatients({ branchId: bid, select: 'id, full_name, patient_number, gender, date_of_birth' }),
+                hospQ.order('name'), anaQ.order('full_name'), astQ.order('full_name'),
+                docQ.order('full_name'), prcQ.order('name')
             ]);
-
-            if (!forRes.error) {
-                const mapped = (forRes.data || []).map((r: any) => ({
-                    ...r,
-                    report_date: r.operation_date,
-                    doctor_id: r.surgeon_id,
-                    description: r.procedure_description,
-                    remarks: r.findings || r.complications
-                }));
-                setReports(mapped);
-            }
-            if (!patRes.error) setPatients(patRes.data || []);
+            setPatients(allPats || []);
             if (!hospRes.error) setHospitals(hospRes.data || []);
             if (!anaRes.error) setAnaesthetists(anaRes.data || []);
             if (!astRes.error) setAssistants(astRes.data || []);
             if (!docRes.error) setDoctors(docRes.data || []);
             if (!prcRes.error) setProcedures(prcRes.data || []);
-
-            // Log errors if any
-            if (docRes.error) console.error('Error loading doctors:', docRes.error);
-        } catch (e) {
-            console.error('Operation Reports loadAll full error:', e);
-        } finally {
-            setLoading(false);
-        }
+        } catch (e) { console.error('loadReferences error:', e); }
     }
+
+    async function loadRecords() {
+        if (!hasLoadedOnce.current) setLoading(true);
+        try {
+            const bid = profile?.branch_id;
+            const from = (currentPage - 1) * itemsPerPage;
+            const to = from + itemsPerPage - 1;
+
+            let q = supabase.from('operation_reports')
+                .select('*, patient:patients(id, full_name, patient_number, gender, date_of_birth, phone, email), doctor:users(full_name, specialization, qualifications, signature_url), procedure:surgical_procedures(name), hospital:hospitals(name)', { count: 'exact' })
+                .order('operation_date', { ascending: false }).order('created_at', { ascending: false })
+                .range(from, to);
+            if (bid) q = q.eq('branch_id', bid);
+
+            const { data, error, count } = await q;
+            if (error) throw error;
+
+            const mapped = (data || []).map((r: any) => ({
+                ...r,
+                report_date: r.operation_date,
+                doctor_id: r.surgeon_id,
+                description: r.procedure_description,
+                remarks: r.findings || r.complications
+            }));
+            setReports(mapped);
+            setTotalDbCount(count || 0);
+            hasLoadedOnce.current = true;
+        } catch (e) { console.error('Operation Reports loadRecords error:', e); }
+        finally { setLoading(false); }
+    }
+
+    const loadAll = () => { loadRecords(); loadReferences(); };
 
     const resetForm = () => {
         setForm({
@@ -196,6 +235,155 @@ export default function OperationReports() {
             doctor_id: profile?.id || ''
         });
         setSelectedDoc(null);
+        setSendSmsOnSave(false);
+        setSendEmailOnSave(false);
+    };
+
+    const handleOpenSmsModal = (report: OperationReport) => {
+        const pat = report.patient as any;
+        const patientPhone = pat?.phone || patients.find(p => p.id === (report as any).patient_id)?.phone || '';
+        const procName = report.procedure?.name || (report as any).procedure_text || (report as any).operation_name || 'Surgical Procedure';
+        const docName = report.doctor?.full_name ? `Dr. ${report.doctor.full_name}` : 'Surgeon';
+        const hospName = report.hospital?.name || '';
+        const reportDate = new Date(report.report_date).toLocaleDateString();
+
+        const defaultSms = `Dear ${pat?.full_name || 'Patient'}, your Operation Report for ${procName} conducted on ${reportDate}${hospName ? ` at ${hospName}` : ''} by ${docName} has been processed. Thank you.`;
+
+        setSmsTargetReport(report);
+        setSmsRecipientPhone(patientPhone);
+        setSmsMessage(defaultSms);
+        setShowSmsModal(true);
+    };
+
+    const handleConfirmSendSms = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!smsRecipientPhone.trim()) {
+            alert('Please enter a valid phone number.');
+            return;
+        }
+        if (!smsMessage.trim()) {
+            alert('SMS message text cannot be blank.');
+            return;
+        }
+
+        setSendingSms(true);
+        try {
+            const branchId = profile?.branch_id || '';
+            const patId = (smsTargetReport?.patient as any)?.id || (smsTargetReport as any)?.patient_id;
+
+            const res = await smsService.sendSms({
+                recipientPhone: smsRecipientPhone.trim(),
+                triggerType: 'resource_shared',
+                variables: {
+                    patient_name: smsTargetReport?.patient?.full_name || 'Patient',
+                    title: smsTargetReport?.procedure?.name || 'Operation Report',
+                    link: window.location.origin + '/operation-reports',
+                    expiry: 'N/A'
+                },
+                branchId,
+                patientId: patId
+            });
+
+            if (res.success) {
+                alert(`✅ SMS successfully dispatched to ${smsRecipientPhone}!`);
+                setShowSmsModal(false);
+            } else {
+                alert(`⚠️ SMS Logged: ${res.error || 'Sent via SMS queue'}`);
+                setShowSmsModal(false);
+            }
+
+            if (profile?.id && profile?.branch_id) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id,
+                    action: 'CREATE',
+                    tableName: 'sms_logs',
+                    details: `Triggered SMS notification for Operation Report ID ${smsTargetReport?.id}`
+                });
+            }
+        } catch (err: any) {
+            alert(`Error sending SMS: ${err.message}`);
+        } finally {
+            setSendingSms(false);
+        }
+    };
+
+    const handleOpenEmailModal = (report: OperationReport) => {
+        const pat = report.patient as any;
+        const patientEmail = pat?.email || patients.find(p => p.id === (report as any).patient_id)?.email || '';
+        const procName = report.procedure?.name || (report as any).procedure_text || (report as any).operation_name || 'Surgical Procedure';
+        const docName = report.doctor?.full_name ? `Dr. ${report.doctor.full_name}` : 'Surgeon';
+        const hospName = report.hospital?.name || '';
+        const reportDate = new Date(report.report_date).toLocaleDateString();
+
+        const defaultSubject = `Operation Report: ${procName} - ${pat?.full_name || 'Patient'}`;
+        const defaultBody = `
+            <div style="font-family: Arial, sans-serif; padding: 15px; color: #333;">
+                <h2 style="color: #2563eb; border-bottom: 2px solid #2563eb; padding-bottom: 8px;">Operation Report Summary</h2>
+                <p><strong>Patient Name:</strong> ${pat?.full_name || ''} (${pat?.patient_number || ''})</p>
+                <p><strong>Date of Operation:</strong> ${reportDate}</p>
+                <p><strong>Procedure Conducted:</strong> ${procName}</p>
+                <p><strong>Hospital / Facility:</strong> ${hospName || 'N/A'}</p>
+                <p><strong>Surgeon:</strong> ${docName}</p>
+                <p><strong>Anaesthesia Type:</strong> ${report.anaesthesia_type || 'General'}</p>
+                ${report.description ? `<div style="margin-top:12px; padding:10px; background:#f8fafc; border-left:4px solid #2563eb;"><strong>Operation Description:</strong><br/>${report.description}</div>` : ''}
+                ${report.post_op_plan ? `<div style="margin-top:12px; padding:10px; background:#f0fdf4; border-left:4px solid #16a34a;"><strong>Post-Op Plan:</strong><br/>${report.post_op_plan}</div>` : ''}
+                ${report.remarks ? `<div style="margin-top:12px; padding:10px; background:#fffbeb; border-left:4px solid #d97706;"><strong>Remarks / Findings:</strong><br/>${report.remarks}</div>` : ''}
+                <br/>
+                <p style="font-size: 12px; color: #666;">Warm regards,<br/><strong>${branch?.name || 'SpiritMed Medical Center'}</strong></p>
+            </div>
+        `.trim();
+
+        setEmailTargetReport(report);
+        setEmailRecipient(patientEmail);
+        setEmailSubject(defaultSubject);
+        setEmailBody(defaultBody);
+        setShowEmailModal(true);
+    };
+
+    const handleConfirmSendEmail = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!emailRecipient.trim()) {
+            alert('Please enter a recipient email address.');
+            return;
+        }
+        if (!emailSubject.trim()) {
+            alert('Please enter an email subject.');
+            return;
+        }
+
+        setSendingEmail(true);
+        try {
+            const branchId = profile?.branch_id || '';
+            const { error } = await supabase.from('email_logs').insert([{
+                branch_id: branchId,
+                recipient_email: emailRecipient.trim(),
+                recipient_name: emailTargetReport?.patient?.full_name || 'Patient',
+                subject: emailSubject.trim(),
+                body: emailBody,
+                status: 'sent',
+                sent_at: new Date().toISOString()
+            }]);
+
+            if (error) throw error;
+
+            alert(`✅ Email successfully logged and sent to ${emailRecipient}!`);
+            setShowEmailModal(false);
+
+            if (profile?.id && profile?.branch_id) {
+                await logActivity(supabase, {
+                    userId: profile.id,
+                    branchId: profile.branch_id,
+                    action: 'CREATE',
+                    tableName: 'email_logs',
+                    details: `Triggered Email notification for Operation Report ID ${emailTargetReport?.id}`
+                });
+            }
+        } catch (err: any) {
+            alert(`Error sending email: ${err.message}`);
+        } finally {
+            setSendingEmail(false);
+        }
     };
 
     async function handleSave(e: React.FormEvent) {
@@ -235,6 +423,35 @@ export default function OperationReports() {
                 if (error) throw error;
             }
 
+            // Auto-trigger notifications if checked
+            const targetPatient = patients.find(p => p.id === form.patient_id);
+            if (sendSmsOnSave && targetPatient?.phone) {
+                smsService.sendSms({
+                    recipientPhone: targetPatient.phone,
+                    triggerType: 'resource_shared',
+                    variables: {
+                        patient_name: targetPatient.full_name,
+                        title: 'Operation Report',
+                        link: window.location.origin + '/operation-reports',
+                        expiry: 'N/A'
+                    },
+                    branchId: profile?.branch_id || '',
+                    patientId: targetPatient.id
+                }).catch(err => console.warn('Auto SMS send warning:', err));
+            }
+
+            if (sendEmailOnSave && targetPatient?.email) {
+                supabase.from('email_logs').insert([{
+                    branch_id: profile?.branch_id || '',
+                    recipient_email: targetPatient.email,
+                    recipient_name: targetPatient.full_name,
+                    subject: `Operation Report: ${procedureName || 'Surgical Operation'}`,
+                    body: `<p>Dear ${targetPatient.full_name}, your operation report for ${procedureName || 'the procedure'} conducted on ${form.report_date} has been saved.</p>`,
+                    status: 'sent',
+                    sent_at: new Date().toISOString()
+                }]).catch(err => console.warn('Auto Email send warning:', err));
+            }
+
             setShowModal(false);
             resetForm();
             setCurrentPage(1);
@@ -253,8 +470,8 @@ export default function OperationReports() {
 
     async function handleCreatePatient(e: React.FormEvent) {
         e.preventDefault();
-        const pNum = `P-${Date.now().toString().slice(-6)}`;
-        const generatedEmail = newPatientForm.email || `patient.${pNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+        const pNum = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+        const generatedEmail = newPatientForm.email || `patient.${pNum}@spiritmed.com`;
         const generatedPassword = 'patient123456';
         const { data, error } = await supabase.from('patients').insert([{
             ...newPatientForm,
@@ -329,7 +546,9 @@ export default function OperationReports() {
                 branch={branch}
                 allAnaesthetists={anaesthetists}
                 allAssistants={assistants}
-                onBack={() => setViewMode('table')}
+                autoPrint={actionTrigger === 'print'}
+                autoDownload={actionTrigger === 'download'}
+                onBack={() => { setViewMode('table'); setActionTrigger('none'); }}
                 onEdit={() => {
                     const { patient, doctor, hospital, procedure, anaesthetist_ids, assistant_ids, created_at, updated_at, id, ...formData } = selectedDoc as any;
                     setForm({
@@ -339,9 +558,11 @@ export default function OperationReports() {
                     } as any);
                     setShowModal(true);
                     setViewMode('table');
+                    setActionTrigger('none');
                 }}
-                onAddNew={() => { resetForm(); setShowModal(true); setViewMode('table'); }}
-                onSendEmail={() => alert('Email functionality coming soon')}
+                onAddNew={() => { resetForm(); setShowModal(true); setViewMode('table'); setActionTrigger('none'); }}
+                onSendEmail={() => handleOpenEmailModal(selectedDoc)}
+                onSendSms={() => handleOpenSmsModal(selectedDoc)}
             />
         );
     }
@@ -416,7 +637,9 @@ export default function OperationReports() {
                         <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
                             <span className="text-xs text-gray-500 font-medium">{r.hospital?.name || 'Main Hospital'}</span>
                             <div className="flex items-center space-x-1">
-                                <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); setActionTrigger('none'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); setActionTrigger('print'); }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition" title="Print Report"><Printer className="w-4 h-4" /></button>
+                                <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); setActionTrigger('download'); }} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded transition" title="Download PDF"><Download className="w-4 h-4" /></button>
                                 <button onClick={() => {
                                     setSelectedDoc(r);
                                     const { patient, doctor, hospital, procedure, created_at, updated_at, id, ...formData } = r as any;
@@ -426,8 +649,8 @@ export default function OperationReports() {
                                         assistant_ids: formData.assistant_ids || []
                                     } as any);
                                     setShowModal(true);
-                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded transition" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
                             </div>
                         </div>
                     </div>
@@ -466,8 +689,12 @@ export default function OperationReports() {
                                     <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">{r.hospital?.name || 'N/A'}</td>
                                     <td className="px-6 py-4 text-sm text-gray-500 font-medium">Dr. {r.doctor?.full_name}</td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                        <div className="flex justify-end gap-1.5">
+                                            <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); setActionTrigger('none'); }} className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded transition" title="View Detail"><Eye className="w-4 h-4" /></button>
+                                            <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); setActionTrigger('print'); }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition" title="Print Report"><Printer className="w-4 h-4" /></button>
+                                            <button onClick={() => { setSelectedDoc(r); setViewMode('detailed'); setActionTrigger('download'); }} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded transition" title="Download PDF"><Download className="w-4 h-4" /></button>
+                                            <button onClick={() => handleOpenSmsModal(r)} className="p-1.5 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded transition" title="Send SMS"><MessageSquare className="w-4 h-4" /></button>
+                                            <button onClick={() => handleOpenEmailModal(r)} className="p-1.5 text-sky-600 hover:bg-sky-50 dark:hover:bg-sky-900/30 rounded transition" title="Send Email"><Mail className="w-4 h-4" /></button>
                                             <button onClick={() => {
                                                 setSelectedDoc(r);
                                                 const { patient, doctor, hospital, procedure, created_at, updated_at, id, ...formData } = r as any;
@@ -477,8 +704,8 @@ export default function OperationReports() {
                                                     assistant_ids: formData.assistant_ids || []
                                                 } as any);
                                                 setShowModal(true);
-                                            }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                            <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                            }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/30 rounded transition" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                            <button onClick={() => handleDelete(r.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
                                         </div>
                                     </td>
                                 </tr>
@@ -641,12 +868,12 @@ export default function OperationReports() {
 
                                 <div>
                                     <label className={labelCls}>Description</label>
-                                    <textarea rows={4} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className={inputCls} placeholder="Detailed description of the procedure..." />
+                                    <RichTextEditor value={form.description} onChange={val => setForm({ ...form, description: val })} placeholder="Detailed description of the procedure..." />
                                 </div>
 
                                 <div>
                                     <label className={labelCls}>Post Operation Plan</label>
-                                    <textarea rows={4} value={form.post_op_plan} onChange={e => setForm({ ...form, post_op_plan: e.target.value })} className={inputCls} placeholder="Immediate post-operative instructions..." />
+                                    <RichTextEditor value={form.post_op_plan} onChange={val => setForm({ ...form, post_op_plan: val })} placeholder="Immediate post-operative instructions..." />
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -662,7 +889,28 @@ export default function OperationReports() {
 
                                 <div>
                                     <label className={labelCls}>Remarks</label>
-                                    <textarea rows={4} value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })} className={inputCls} placeholder="Any other observations or notes..." />
+                                    <RichTextEditor value={form.remarks} onChange={val => setForm({ ...form, remarks: val })} placeholder="Any other observations or notes..." />
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-6 py-3 border-t border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/30 px-3 rounded-lg mt-4">
+                                    <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={sendSmsOnSave}
+                                            onChange={(e) => setSendSmsOnSave(e.target.checked)}
+                                            className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                                        />
+                                        <span>📱 Send SMS Notification on Save</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={sendEmailOnSave}
+                                            onChange={(e) => setSendEmailOnSave(e.target.checked)}
+                                            className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                                        />
+                                        <span>✉️ Send Email Notification on Save</span>
+                                    </label>
                                 </div>
                             </div>
 
@@ -820,6 +1068,79 @@ export default function OperationReports() {
                             <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700">
                                 <button type="button" onClick={() => setShowProcedureModal(false)} className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition">Cancel</button>
                                 <button type="submit" className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition shadow-md">Save Procedure</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+            {/* Send SMS Modal */}
+            {showSmsModal && smsTargetReport && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-100 dark:border-gray-700">
+                        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-purple-50 dark:bg-purple-900/30">
+                            <h2 className="text-lg font-bold text-purple-900 dark:text-purple-200 flex items-center gap-2">
+                                <MessageSquare className="w-5 h-5 text-purple-600" /> Send Operation Report SMS
+                            </h2>
+                            <button onClick={() => setShowSmsModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-6 h-6" /></button>
+                        </div>
+                        <form onSubmit={handleConfirmSendSms} className="p-6 space-y-4">
+                            <div>
+                                <label className={labelCls}>Patient Name</label>
+                                <input type="text" disabled value={smsTargetReport.patient?.full_name || 'Patient'} className={`${inputCls} bg-gray-100 dark:bg-gray-800 cursor-not-allowed`} />
+                            </div>
+                            <div>
+                                <label className={labelCls}>Recipient Phone Number *</label>
+                                <input required type="tel" placeholder="+263 77 000 0000" value={smsRecipientPhone} onChange={e => setSmsRecipientPhone(e.target.value)} className={inputCls} />
+                            </div>
+                            <div>
+                                <label className={labelCls}>SMS Message Text *</label>
+                                <textarea required rows={4} value={smsMessage} onChange={e => setSmsMessage(e.target.value)} className={inputCls} placeholder="Type SMS message..." />
+                            </div>
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700">
+                                <button type="button" onClick={() => setShowSmsModal(false)} className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition">Cancel</button>
+                                <button type="submit" disabled={sendingSms} className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-bold transition shadow-md flex items-center gap-2 disabled:opacity-50">
+                                    <Send className="w-4 h-4" /> {sendingSms ? 'Sending...' : 'Send SMS Now'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Send Email Modal */}
+            {showEmailModal && emailTargetReport && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-100 dark:border-gray-700">
+                        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-blue-50 dark:bg-blue-900/30">
+                            <h2 className="text-lg font-bold text-blue-900 dark:text-blue-200 flex items-center gap-2">
+                                <Mail className="w-5 h-5 text-blue-600" /> Send Operation Report Email
+                            </h2>
+                            <button onClick={() => setShowEmailModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-6 h-6" /></button>
+                        </div>
+                        <form onSubmit={handleConfirmSendEmail} className="p-6 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className={labelCls}>Patient Name</label>
+                                    <input type="text" disabled value={emailTargetReport.patient?.full_name || 'Patient'} className={`${inputCls} bg-gray-100 dark:bg-gray-800 cursor-not-allowed`} />
+                                </div>
+                                <div>
+                                    <label className={labelCls}>Recipient Email Address *</label>
+                                    <input required type="email" placeholder="patient@example.com" value={emailRecipient} onChange={e => setEmailRecipient(e.target.value)} className={inputCls} />
+                                </div>
+                            </div>
+                            <div>
+                                <label className={labelCls}>Email Subject *</label>
+                                <input required type="text" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} className={inputCls} />
+                            </div>
+                            <div>
+                                <label className={labelCls}>Email Body (Formatted HTML Summary)</label>
+                                <RichTextEditor value={emailBody} onChange={val => setEmailBody(val)} minHeight="160px" />
+                            </div>
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700">
+                                <button type="button" onClick={() => setShowEmailModal(false)} className="px-4 py-2 text-sm font-semibold text-gray-500 hover:text-gray-700 transition">Cancel</button>
+                                <button type="submit" disabled={sendingEmail} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold transition shadow-md flex items-center gap-2 disabled:opacity-50">
+                                    <Send className="w-4 h-4" /> {sendingEmail ? 'Sending Email...' : 'Send Email Now'}
+                                </button>
                             </div>
                         </form>
                     </div>

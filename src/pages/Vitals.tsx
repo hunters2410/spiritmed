@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAllPatients } from '../utils/patientUtils';
 import { Plus, Search, Activity, HeartPulse, Thermometer, Wind, Scale, Ruler, Droplets, History, User, ChevronLeft, ChevronRight } from 'lucide-react';
 import { SearchablePatientSelect } from '../components/SearchablePatientSelect';
 import { useToast } from '../contexts/ToastContext';
@@ -64,22 +65,32 @@ export function Vitals() {
 
     const loadVitals = async () => {
         try {
-            let query = supabase
-                .from('vital_signs')
-                .select(`
-          *,
-          patient:patients(full_name, patient_number),
-          recorder:users!recorded_by(full_name)
-        `)
-                .order('recorded_at', { ascending: false });
+            let allVitals: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
+            while (true) {
+                let query = supabase
+                    .from('vital_signs')
+                    .select(`
+                      *,
+                      patient:patients(full_name, patient_number),
+                      recorder:users!recorded_by(full_name)
+                    `)
+                    .order('recorded_at', { ascending: false })
+                    .range(from, from + pageSize - 1);
 
-            if (profile?.role !== 'super_admin' && profile?.branch_id) {
-                query = query.eq('branch_id', profile.branch_id);
+                if (profile?.role !== 'super_admin' && profile?.branch_id) {
+                    query = query.eq('branch_id', profile.branch_id);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allVitals = allVitals.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
             }
-
-            const { data, error } = await query;
-            if (error) throw error;
-            setVitalsList(data || []);
+            setVitalsList(allVitals);
         } catch (error) {
             console.error('Error loading vitals:', error);
         } finally {
@@ -89,18 +100,12 @@ export function Vitals() {
 
     const loadPatients = async () => {
         try {
-            let query = supabase
-                .from('patients')
-                .select('id, full_name, patient_number')
-                .eq('status', 'active')
-                .order('full_name');
-
-            if (profile?.role !== 'super_admin' && profile?.branch_id) {
-                query = query.eq('branch_id', profile.branch_id);
-            }
-
-            const { data, error } = await query;
-            if (error) throw error;
+            const activeBranchId = profile?.role !== 'super_admin' ? profile?.branch_id : undefined;
+            const data = await fetchAllPatients({
+                branchId: activeBranchId,
+                select: 'id, full_name, patient_number',
+                activeOnly: true
+            });
             setPatients(data || []);
         } catch (error) {
             console.error('Error loading patients:', error);

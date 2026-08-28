@@ -4,6 +4,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { supabase } from '../lib/supabase';
 import { emailService } from '../utils/emailService';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 interface Branch {
     id: string;
@@ -29,10 +30,19 @@ interface PaymentData {
         total_amount: number;
         paid_amount: number;
         balance: number;
+        payment_method?: string;
         medical_aid_amount?: number;
         shortfall_amount?: number;
         medical_aid_balance?: number;
         shortfall_balance?: number;
+        bill_items?: {
+            id?: string;
+            code?: string;
+            description: string;
+            quantity: number;
+            unit_price: number;
+            total_price: number;
+        }[];
         patient: {
             full_name: string;
             patient_number: string;
@@ -54,17 +64,7 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { 
-            scale: 2,
-            useCORS: true,
-            allowTaint: true
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`RECEIPT_${data.bill.bill_number}.pdf`);
+        await exportElementToPdf(printRef.current, `RECEIPT_${data.bill.bill_number}.pdf`);
     };
 
     const handleSendEmail = async () => {
@@ -75,18 +75,7 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
 
         try {
             setIsSending(true);
-            const canvas = await html2canvas(printRef.current, { 
-                scale: 2,
-                useCORS: true,
-                allowTaint: true
-            });
-            const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-            
-            const pdfBlob = pdf.output('blob');
+            const pdfBlob = (await exportElementToPdf(printRef.current, '', true)) as Blob;
             const fileName = `RCPT_${data.bill.bill_number}_${Date.now()}.pdf`;
             const filePath = `receipts/${data.id}/${fileName}`;
 
@@ -133,9 +122,15 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
                 </button>
             </div>
 
+            <style>{`
+                @media print {
+                    @page { size: A4 portrait; margin: 10mm; }
+                    body { background: #ffffff !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                }
+            `}</style>
             {/* Document View */}
-            <div className="flex-1 max-w-[210mm]">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none">
+            <div className="flex-1 w-full overflow-x-auto flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
                     {/* Header */}
                     <div className="flex justify-between items-start border-b pb-6 mb-6">
                         <div>
@@ -174,6 +169,42 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
                         </div>
                     </div>
 
+                    {/* Services & Procedures Table */}
+                    {data.bill.bill_items && data.bill.bill_items.length > 0 && (
+                        <div className="mb-10">
+                            <p className="uppercase text-[9px] font-bold text-gray-500 tracking-widest mb-2 border-b pb-1">Services &amp; Procedures</p>
+                            <table className="w-full text-[10px] border-collapse">
+                                <thead>
+                                    <tr className="bg-gray-100 text-gray-600 uppercase text-[9px] font-black tracking-wider">
+                                        <th className="px-3 py-2 text-left border border-gray-200">Description</th>
+                                        <th className="px-3 py-2 text-center border border-gray-200 w-16">Qty</th>
+                                        <th className="px-3 py-2 text-right border border-gray-200 w-24">Unit Price</th>
+                                        <th className="px-3 py-2 text-right border border-gray-200 w-24">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {data.bill.bill_items.map((item, idx) => (
+                                        <tr key={item.id || idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'}>
+                                            <td className="px-3 py-2 border border-gray-200 font-medium text-gray-800">
+                                                {item.code && <span className="text-gray-400 mr-1.5">[{item.code}]</span>}
+                                                {item.description}
+                                            </td>
+                                            <td className="px-3 py-2 border border-gray-200 text-center">{item.quantity}</td>
+                                            <td className="px-3 py-2 border border-gray-200 text-right font-mono">${(item.unit_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                            <td className="px-3 py-2 border border-gray-200 text-right font-mono font-bold">${(item.total_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                                <tfoot>
+                                    <tr className="bg-gray-100">
+                                        <td colSpan={3} className="px-3 py-2 text-right text-[9px] uppercase font-black text-gray-500 border border-gray-200">Invoice Total</td>
+                                        <td className="px-3 py-2 text-right font-black border border-gray-200">${(data.bill.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    )}
+
                     <div className="py-12 border-y-2 border-double border-gray-200 mb-10 text-center">
                         <p className="uppercase text-[10px] font-bold text-gray-400 tracking-widest mb-2">Total Amount Received</p>
                         <p className="text-5xl font-bold">${data.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
@@ -186,8 +217,8 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
                         </div>
                     )}
 
-                    {/* Split Financial Summary */}
-                    {(data.bill.medical_aid_amount || 0) > 0 && (
+                    {/* Billing Split — only for medical aid patients */}
+                    {data.bill.payment_method === 'medical_aid' && (data.bill.medical_aid_amount || 0) > 0 && (
                         <div className="mb-10 overflow-hidden border border-gray-200 rounded-lg">
                             <table className="w-full text-[10px] text-left border-collapse">
                                 <thead className="bg-gray-100 uppercase font-black text-gray-500 tracking-wider">
@@ -238,7 +269,13 @@ export function ReceiptPrintView({ data, branch, onBack }: Props) {
                         ) : null}
                         <div className="flex justify-between font-black text-sm pt-1 bg-yellow-100/50 px-2 rounded">
                             <span className="uppercase tracking-widest text-[10px]">Net Remaining Balance:</span>
-                            <span className="text-red-600">${(data.bill.balance ?? data.bill.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            <span className="text-red-600">${(
+                                (() => {
+                                    const stored = data.bill.balance ?? 0;
+                                    const paid = data.bill.paid_amount ?? 0;
+                                    return stored > 0 ? stored : Math.max(0, (data.bill.total_amount || 0) - paid);
+                                })()
+                            ).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                         </div>
                     </div>
 

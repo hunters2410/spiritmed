@@ -30,11 +30,15 @@ const Settings   = lazy(() => import('./pages/Settings').then(m => ({ default: m
 const Profile    = lazy(() => import('./pages/Profile').then(m => ({ default: m.Profile })));
 
 // Patient management
-const Patients           = lazy(() => import('./pages/Patients').then(m => ({ default: m.Patients })));
+const AllPatients        = lazy(() => import('./pages/AllPatients').then(m => ({ default: m.AllPatients })));
+const PatientDues        = lazy(() => import('./pages/PatientDues').then(m => ({ default: m.PatientDues })));
 const DeceasedPatients   = lazy(() => import('./pages/DeceasedPatients').then(m => ({ default: m.DeceasedPatients })));
 const DischargedPatients = lazy(() => import('./pages/DischargedPatients').then(m => ({ default: m.DischargedPatients })));
+const OldPatients        = lazy(() => import('./pages/OldPatients').then(m => ({ default: m.OldPatients })));
 const PatientFiles       = lazy(() => import('./pages/PatientFiles').then(m => ({ default: m.PatientFiles })));
+const PatientHistory     = lazy(() => import('./pages/PatientHistory').then(m => ({ default: m.PatientHistory })));
 const FileNumberPool     = lazy(() => import('./pages/FileNumberPool').then(m => ({ default: m.FileNumberPool })));
+const ReportsStatistics  = lazy(() => import('./pages/ReportsStatistics').then(m => ({ default: m.ReportsStatistics })));
 
 // Appointments
 const Appointments        = lazy(() => import('./pages/Appointments').then(m => ({ default: m.Appointments })));
@@ -93,6 +97,8 @@ const Accounting         = lazy(() => import('./pages/Accounting').then(m => ({ 
 const MedicalAids        = lazy(() => import('./pages/MedicalAids').then(m => ({ default: m.MedicalAids })));
 
 // Inventory & pharmacy
+const AssetsRegister      = lazy(() => import('./pages/AssetsRegister').then(m => ({ default: m.AssetsRegister })));
+const AssetCategories    = lazy(() => import('./pages/AssetCategories').then(m => ({ default: m.AssetCategories })));
 const Inventory           = lazy(() => import('./pages/Inventory').then(m => ({ default: m.Inventory })));
 const Pharmacy            = lazy(() => import('./pages/Pharmacy').then(m => ({ default: m.Pharmacy })));
 const Suppliers           = lazy(() => import('./pages/Suppliers').then(m => ({ default: m.Suppliers })));
@@ -111,8 +117,83 @@ const AuditLogs       = lazy(() => import('./pages/AuditLogs').then(m => ({ defa
 
 // ---------------------------------------------------------------------------
 
+const PAGE_MODULE_MAP: Record<string, string> = {
+  dashboard: 'dashboard',
+  branches: 'branches',
+  patients: 'patients',
+  'patients/due': 'patient_due',
+  'patients/deceased': 'deceased_patients',
+  'patients/discharged': 'discharged_patients',
+  'patients/old': 'old_patients',
+  'patient-files': 'patient_files',
+  'patient-history': 'patient_history',
+  'patient-file-pool': 'file_number_pool',
+  'reports-statistics': 'reports_statistics',
+  appointments: 'appointments',
+  'appointments/calendar': 'appointment_calendar',
+  'appointments/schedule': 'appointment_schedule',
+  'appointments/reports': 'appointment_reports',
+  'appointments/online-booking': 'online_booking',
+  doctors: 'staff',
+  nurses: 'staff',
+  receptionists: 'staff',
+  accountants: 'staff',
+  users: 'staff',
+  roles: 'roles',
+  attendance: 'attendance',
+  'leave-management': 'leave_management',
+  payroll: 'payroll',
+  'human-resources': 'human_resources',
+  consultations: 'consultations',
+  prescriptions: 'prescriptions',
+  'vital-signs': 'vital_signs',
+  complaints: 'complaints',
+  investigations: 'investigations',
+  diagnoses: 'diagnoses',
+  'follow-ups': 'follow_ups',
+  histology: 'histology',
+  'medical-reports': 'medical_reports',
+  'discharge-summaries': 'discharge_summaries',
+  'referral-forms': 'referral_forms',
+  'medical-certificates': 'medical_certificates',
+  'operation-reports': 'operation_reports',
+  'admission-letters': 'admission_letters',
+  'lab-results': 'lab_results',
+  anaesthetists: 'anaesthetists',
+  assistants: 'assistants',
+  hospitals: 'hospitals',
+  'surgical-procedures': 'surgical_procedures',
+  medicines: 'medicines',
+  'medicine-frequencies': 'medicine_frequencies',
+  bills: 'billing',
+  estimates: 'estimates',
+  'payment-procedures': 'payment_procedures',
+  payments: 'payments',
+  expenses: 'expenses',
+  'expense-categories': 'expense_categories',
+  accounting: 'accounting',
+  'medical-aids': 'medical_aids',
+  'assets-register': 'assets_register',
+  'assets-categories': 'asset_categories',
+  inventory: 'inventory',
+  pharmacy: 'inventory',
+  suppliers: 'suppliers',
+  'inventory/categories': 'inventory_categories',
+  'inventory/units': 'inventory_units',
+  'hospital-files': 'hospital_files',
+  'referral-doctors': 'referral_doctors',
+  statistics: 'statistics',
+  emails: 'emails',
+  sms: 'sms',
+  chats: 'chats',
+  notifications: 'notifications',
+  'audit-logs': 'audit_logs',
+  settings: 'settings',
+  profile: 'profile',
+};
+
 function AppContent() {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, hasPermission } = useAuth();
   const [currentPage, setCurrentPage] = useState('dashboard');
 
   useEffect(() => {
@@ -196,14 +277,27 @@ function AppContent() {
       return <PublicRegistration />;
     }
 
+    const targetModule = PAGE_MODULE_MAP[currentPage] || (currentPage.startsWith('payments') ? 'payments' : currentPage.startsWith('bills') ? 'billing' : currentPage.startsWith('estimates') ? 'estimates' : null);
+    if (targetModule && !hasPermission(targetModule, 'view')) {
+      // Redirect to All Patients instead of showing Access Restricted
+      if (currentPage !== 'patients') {
+        window.location.href = '/patients';
+        return null;
+      }
+    }
+
     switch (currentPage) {
       case 'dashboard':           return <Dashboard />;
       case 'branches':            return <Branches />;
-      case 'patients':            return <Patients />;
+      case 'patients':            return <AllPatients />;
+      case 'patients/due':        return <PatientDues />;
       case 'patients/deceased':   return <DeceasedPatients />;
       case 'patients/discharged': return <DischargedPatients />;
+      case 'patients/old':        return <OldPatients />;
       case 'patient-files':       return <PatientFiles />;
+      case 'patient-history':     return <PatientHistory />;
       case 'patient-file-pool':   return <FileNumberPool />;
+      case 'reports-statistics':  return <ReportsStatistics />;
       case 'appointments':             return <Appointments />;
       case 'appointments/calendar':    return <AppointmentCalendar />;
       case 'appointments/schedule':    return <AppointmentSchedule />;
@@ -248,6 +342,8 @@ function AppContent() {
       case 'expense-categories':  return <ExpenseCategories />;
       case 'accounting':          return <Accounting />;
       case 'medical-aids':        return <MedicalAids />;
+      case 'assets-register':     return <AssetsRegister />;
+      case 'assets-categories':   return <AssetCategories />;
       case 'inventory':           return <Inventory />;
       case 'pharmacy':            return <Pharmacy />;
       case 'suppliers':           return <Suppliers />;
@@ -263,7 +359,13 @@ function AppContent() {
       case 'audit-logs':          return <AuditLogs />;
       case 'settings':            return <Settings />;
       case 'profile':             return <Profile />;
-      default:                    return <Dashboard />;
+      default: {
+        // Handle sub-routes like payments/receipt/ID, bills/invoice/ID, estimates/invoice/ID
+        if (currentPage.startsWith('payments')) return <Payments />;
+        if (currentPage.startsWith('bills'))    return <Bills />;
+        if (currentPage.startsWith('estimates'))return <EstimateBills />;
+        return <Dashboard />;
+      }
     }
   };
 

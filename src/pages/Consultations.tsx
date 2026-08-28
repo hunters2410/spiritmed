@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
+
+// ── Module-level caches (5-minute TTL, survives navigation) ────────────────────
+const _cCache: { data: any[] | null; ts: number; profileId: string | null } = { data: null, ts: 0, profileId: null };
+const _cpCache: { data: any[] | null; ts: number; branchId: string | null } = { data: null, ts: 0, branchId: null };
+const C_TTL = 5 * 60 * 1000;
+function isCCacheValid(profileId: string | null) { return _cCache.data !== null && _cCache.profileId === profileId && Date.now() - _cCache.ts < C_TTL; }
+function isCpCacheValid(branchId: string | null) { return _cpCache.data !== null && _cpCache.branchId === branchId && Date.now() - _cpCache.ts < C_TTL; }
+export function invalidateConsultationsCache() { _cCache.data = null; _cCache.ts = 0; }
+// ─────────────────────────────────────────────────────────────────────────────
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAllPatients, fetchAllReferralDoctors } from '../utils/patientUtils';
 
 const renderHtmlOrText = (text?: string) => {
     if (!text) return '—';
-    if (/<[a-z][\s\S]*>/i.test(text)) {
-        return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
-    }
-    return <span className="whitespace-pre-wrap">{text}</span>;
+    return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content text-xs text-gray-700 dark:text-gray-300" />;
 };
 import {
     Plus, Search, Stethoscope, FileText, ClipboardList,
@@ -17,6 +24,7 @@ import {
     History, FlaskConical, Microscope, Cigarette, Wine, HeartPulse, Syringe,
     Eye, Pencil, Trash2, Printer, Download, ChevronLeft, ChevronRight, Filter
 } from 'lucide-react';
+import { RichTextEditor } from '../components/RichTextEditor';
 import { ConsultationPrintView } from '../components/ConsultationPrintView';
 import { logActivity } from '../utils/auditLogger';
 import { useToast } from '../contexts/ToastContext';
@@ -199,7 +207,7 @@ function QuickModal({ title, onClose, children }: QuickModalProps) {
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════ */
 export function Consultations() {
-    const { profile } = useAuth();
+    const { profile, hasPermission } = useAuth();
     const { showToast } = useToast();
 
     /* list state */
@@ -290,19 +298,39 @@ export function Consultations() {
         else setLatestVitals(null);
     }, [formData.patient_id]);
 
-    async function loadConsultations() {
+    async function loadConsultations(force = false) {
+        const profileId = profile?.id ?? null;
+        if (!force && isCCacheValid(profileId)) {
+            setConsultations(_cCache.data!);
+            setLoading(false);
+            return;
+        }
         try {
-            let query = supabase.from('consultations').select(`
-                *, patient:patients(full_name, patient_number), 
-                doctor:users!doctor_id(full_name, specialization, qualifications, signature_url),
-                referral_doctor:referral_doctors!referred_by(full_name),
-                prescriptions(prescription_items(medicine:medicines(name, dosage), period, time_unit, advice))
-            `).order('created_at', { ascending: false });
-            if (profile?.role === 'doctor') query = query.eq('doctor_id', profile.id);
-            else if (profile?.role !== 'super_admin' && profile?.role !== 'admin')
-                if (profile?.branch_id) query = query.eq('branch_id', profile.branch_id);
-            const { data, error } = await query;
-            if (error) throw error;
+            let allConsultations: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
+
+            while (true) {
+                let query = supabase.from('consultations').select(`
+                    *, patient:patients(full_name, patient_number), 
+                    doctor:users!doctor_id(full_name, specialization, qualifications, signature_url),
+                    referral_doctor:referral_doctors!referred_by(full_name),
+                    prescriptions(prescription_items(medicine:medicines(name, dosage), period, time_unit, advice))
+                `).order('created_at', { ascending: false }).range(from, from + pageSize - 1);
+
+                if (profile?.role === 'doctor') query = query.eq('doctor_id', profile.id);
+                else if (profile?.role !== 'super_admin' && profile?.role !== 'admin') {
+                    if (profile?.branch_id) query = query.eq('branch_id', profile.branch_id);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allConsultations = allConsultations.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
+            }
+            const data = allConsultations;
 
             const formattedConsultations = (data || []).map(c => {
                 const prescriptionItems = c.prescriptions?.[0]?.prescription_items?.map((item: any) => ({
@@ -317,22 +345,34 @@ export function Consultations() {
                     prescriptions: prescriptionItems,
                 };
             });
+            _cCache.data = formattedConsultations;
+            _cCache.ts = Date.now();
+            _cCache.profileId = profileId;
             setConsultations(formattedConsultations);
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
     }
 
     async function loadPatients() {
-        const { data } = await supabase.from('patients').select('id, full_name, patient_number').eq('status', 'active').order('full_name');
-        setPatients((data || []).map(p => ({ id: p.id, label: `${p.full_name} (${p.patient_number})` })));
+        const branchId = profile?.branch_id ?? null;
+        if (isCpCacheValid(branchId)) {
+            setPatients(_cpCache.data!);
+            return;
+        }
+        const data = await fetchAllPatients({
+            branchId: profile?.branch_id,
+            select: 'id, full_name, patient_number',
+            activeOnly: true
+        });
+        const mapped = (data || []).map(p => ({ id: p.id, label: `${p.full_name} (${p.patient_number})` }));
+        _cpCache.data = mapped;
+        _cpCache.ts = Date.now();
+        _cpCache.branchId = branchId;
+        setPatients(mapped);
     }
 
     async function loadReferralDoctors() {
-        let query = supabase.from('referral_doctors').select('id, full_name').eq('is_active', true);
-        if (profile?.branch_id) {
-            query = query.eq('branch_id', profile.branch_id);
-        }
-        const { data } = await query.order('full_name');
+        const data = await fetchAllReferralDoctors(profile?.branch_id);
         setReferralDoctors((data || []).map(d => ({ id: d.id, label: d.full_name })));
     }
 
@@ -460,21 +500,35 @@ export function Consultations() {
                 }
             }
 
-            // 2. Auto-create Appointment for Follow-up
+            // 2. Auto-create Appointment for Follow-up (Check double booking)
             if (formData.follow_up_date) {
-                await supabase.from('appointments').insert([{
-                    branch_id: profile?.branch_id,
-                    patient_id: formData.patient_id,
-                    doctor_id: profile?.id,
-                    appointment_date: formData.follow_up_date,
-                    appointment_type: 'follow_up',
-                    status: 'pending_confirmation',
-                    notes: `Follow up from consultation on ${new Date().toLocaleDateString()}`,
-                    created_by: profile?.id
-                }]);
+                const targetDateStr = formData.follow_up_date.split('T')[0] || formData.follow_up_date.split(' ')[0];
+                const startOfDay = `${targetDateStr}T00:00:00`;
+                const endOfDay = `${targetDateStr}T23:59:59`;
+
+                const { data: existingAppts } = await supabase
+                    .from('appointments')
+                    .select('id')
+                    .eq('patient_id', formData.patient_id)
+                    .gte('appointment_date', startOfDay)
+                    .lte('appointment_date', endOfDay)
+                    .neq('status', 'cancelled');
+
+                if (!existingAppts || existingAppts.length === 0) {
+                    await supabase.from('appointments').insert([{
+                        branch_id: profile?.branch_id,
+                        patient_id: formData.patient_id,
+                        doctor_id: profile?.id,
+                        appointment_date: formData.follow_up_date,
+                        appointment_type: 'follow_up',
+                        status: 'pending_confirmation',
+                        notes: `Follow up from consultation on ${new Date().toLocaleDateString()}`,
+                        created_by: profile?.id
+                    }]);
+                }
             }
 
-            setShowModal(false); resetForm(); loadConsultations();
+            setShowModal(false); resetForm(); loadConsultations(true);
             showToast('Consultation recorded successfully!');
         } catch (e: any) { console.error(e); showToast(e.message || 'Failed to save consultation', 'error'); }
         finally { setLoading(false); }
@@ -484,19 +538,38 @@ export function Consultations() {
     async function handleAddPatient() {
         if (!newPatient.full_name) return;
         try {
-            const patNum = `P-${Date.now().toString().slice(-6)}`;
-            const generatedEmail = newPatient.email || `patient.${patNum.toLowerCase().replace(/[^a-z0-9]/g, '')}@spiritmed.com`;
+            if (newPatient.email) {
+                const trimmedEmail = newPatient.email.trim();
+                const { data: existingEmail } = await supabase.from('patients').select('id, full_name, patient_number').ilike('email', trimmedEmail);
+                if (existingEmail && existingEmail.length > 0) {
+                    alert(`⚠️ Alert: Email "${trimmedEmail}" is already registered to patient "${existingEmail[0].full_name}" (${existingEmail[0].patient_number}). Please enter a unique email address or leave blank.`);
+                    return;
+                }
+            }
+            if (newPatient.file_number) {
+                const trimmedFile = newPatient.file_number.trim();
+                const { data: existingFile } = await supabase.from('patients').select('id, full_name, patient_number, status').eq('file_number', trimmedFile);
+                if (existingFile && existingFile.length > 0) {
+                    const activeOccupant = existingFile.find(p => p.status === 'active' || (p.status !== 'old_patient' && p.status !== 'inactive'));
+                    if (activeOccupant) {
+                        alert(`⚠️ Alert: File Number "${trimmedFile}" is already occupied by active patient "${activeOccupant.full_name}" (${activeOccupant.patient_number}). Please choose a different file number.`);
+                        return;
+                    }
+                }
+            }
+            const patNum = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+            const finalEmail = newPatient.email ? newPatient.email.trim() : null;
             const generatedPassword = 'patient123456';
             const { data, error } = await supabase.from('patients').insert([{
                 ...newPatient,
-                email: generatedEmail,
+                email: finalEmail,
                 password: generatedPassword,
                 patient_number: patNum,
                 branch_id: profile?.branch_id,
                 status: 'active'
             }]).select().single();
             if (error) throw error;
-            
+
             if (profile?.id && profile?.branch_id && data) {
                 await logActivity(supabase, {
                     userId: profile.id,
@@ -614,8 +687,8 @@ export function Consultations() {
 
         // Initialize section arrays
         const sectionKeys = [
-            'subjective', 'objective', 'assessment_plan', 'medical_history', 
-            'surgical_history', 'medications', 'allergies', 'family_history', 
+            'subjective', 'objective', 'assessment_plan', 'medical_history',
+            'surgical_history', 'medications', 'allergies', 'family_history',
             'social_history', 'ros', 'vitals', 'physical_examination', 'labs', 'plan'
         ];
         sectionKeys.forEach(k => { sections[k] = []; });
@@ -867,15 +940,33 @@ export function Consultations() {
     const [editConsultation, setEditConsultation] = useState<Consultation | null>(null);
     const [deleteId, setDeleteId] = useState<string | null>(null);
     const [editForm, setEditForm] = useState<Partial<Consultation>>({});
+    const [autoPrint, setAutoPrint] = useState(false);
+    const [autoDownload, setAutoDownload] = useState(false);
 
     const handleViewDetailed = (c: Consultation) => {
         setViewConsultation(c);
+        setAutoPrint(false);
+        setAutoDownload(false);
+        setViewMode('detailed');
+    };
+
+    const handlePrintConsultation = (c: Consultation) => {
+        setViewConsultation(c);
+        setAutoPrint(true);
+        setAutoDownload(false);
+        setViewMode('detailed');
+    };
+
+    const handleDownloadPdfConsultation = (c: Consultation) => {
+        setViewConsultation(c);
+        setAutoDownload(true);
+        setAutoPrint(false);
         setViewMode('detailed');
     };
 
     const filteredConsultations = consultations.filter(c => {
         const patientOk = !filterPatient || c.patient?.full_name.toLowerCase().includes(filterPatient.toLowerCase()) || c.patient?.patient_number.toLowerCase().includes(filterPatient.toLowerCase());
-        const diagOk = !filterDiagnosis || 
+        const diagOk = !filterDiagnosis ||
             c.diagnosis?.toLowerCase().includes(filterDiagnosis.toLowerCase()) ||
             c.notes?.toLowerCase().includes(filterDiagnosis.toLowerCase()) ||
             c.chief_complaint?.toLowerCase().includes(filterDiagnosis.toLowerCase());
@@ -911,7 +1002,7 @@ export function Consultations() {
             });
         }
         setDeleteId(null);
-        loadConsultations();
+        loadConsultations(true);
     }
 
     async function handleEditSave() {
@@ -929,7 +1020,7 @@ export function Consultations() {
             });
         }
         setEditConsultation(null);
-        loadConsultations();
+        loadConsultations(true);
     }
 
     function exportPDF() {
@@ -1000,8 +1091,12 @@ export function Consultations() {
                     investigations: resolveInvestigations(viewConsultation.investigations)
                 } as any}
                 branch={branch}
+                autoPrint={autoPrint}
+                autoDownload={autoDownload}
                 onBack={() => {
                     setViewConsultation(null);
+                    setAutoPrint(false);
+                    setAutoDownload(false);
                     setViewMode('table');
                 }}
                 onEdit={() => {
@@ -1037,10 +1132,12 @@ export function Consultations() {
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400 mt-1">Manage patient medical records and visit notes</p>
                 </div>
-                <button onClick={() => setShowModal(true)}
-                    className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-md">
-                    <Plus className="w-5 h-5" /><span>New Consultation</span>
-                </button>
+                {hasPermission('consultations', 'add') && (
+                    <button onClick={() => setShowModal(true)}
+                        className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-md">
+                        <Plus className="w-5 h-5" /><span>New Consultation</span>
+                    </button>
+                )}
             </div>
 
             {/* ── Filter Bar ── */}
@@ -1089,140 +1186,154 @@ export function Consultations() {
                 <>
                     {/* 📱 Mobile Consultation Cards (< md) */}
                     <div className="md:hidden space-y-3">
-                {paginated.map((c, idx) => (
-                    <div key={c.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
-                        <div className="flex items-start justify-between">
-                            <div>
-                                <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{c.patient?.full_name || 'Unknown Patient'}</h3>
-                                <p className="text-xs text-gray-500 font-mono">
-                                    ID: {c.patient?.patient_number ? c.patient.patient_number.split('-')[0] : 'N/A'}
-                                </p>
-                            </div>
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${c.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                                {c.status}
-                            </span>
-                        </div>
+                        {paginated.map((c, idx) => (
+                            <div key={c.id} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 shadow-xs space-y-3">
+                                <div className="flex items-start justify-between">
+                                    <div>
+                                        <h3 className="font-extrabold text-sm text-gray-900 dark:text-white uppercase">{c.patient?.full_name || 'Unknown Patient'}</h3>
+                                        <p className="text-xs text-gray-500 font-mono">
+                                            ID: {c.patient?.patient_number ? c.patient.patient_number.split('-').pop() : 'N/A'}
+                                        </p>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${c.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                        {c.status}
+                                    </span>
+                                </div>
 
-                        <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
-                            <div>
-                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Date</span>
-                                <span className="font-semibold text-gray-900 dark:text-white">{new Date(c.created_at).toLocaleDateString()}</span>
-                            </div>
-                            <div>
-                                <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
-                                <span className="font-semibold text-gray-800 dark:text-gray-200">{c.doctor?.full_name || 'Dr. Medical Staff'}</span>
-                            </div>
-                        </div>
+                                <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-gray-100 dark:border-gray-700">
+                                    <div>
+                                        <span className="text-gray-400 block text-[10px] uppercase font-bold">Date</span>
+                                        <span className="font-semibold text-gray-900 dark:text-white">{new Date(c.created_at).toLocaleDateString()}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-400 block text-[10px] uppercase font-bold">Doctor</span>
+                                        <span className="font-semibold text-gray-800 dark:text-gray-200">{c.doctor?.full_name || 'Dr. Medical Staff'}</span>
+                                    </div>
+                                </div>
 
-                        {c.diagnosis && (
-                            <div className="text-xs bg-blue-50 dark:bg-blue-950/30 p-2 rounded-lg text-blue-900 dark:text-blue-200">
-                                <span className="font-bold text-[10px] uppercase block text-blue-400">Diagnosis</span>
-                                {resolveDiagnosis(c.diagnosis)}
-                            </div>
-                        )}
+                                {c.diagnosis && (
+                                    <div className="text-xs bg-blue-50 dark:bg-blue-950/30 p-2 rounded-lg text-blue-900 dark:text-blue-200">
+                                        <span className="font-bold text-[10px] uppercase block text-blue-400">Diagnosis</span>
+                                        {resolveDiagnosis(c.diagnosis)}
+                                    </div>
+                                )}
 
-                        <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
-                            <button
-                                onClick={() => handleViewDetailed(c)}
-                                className="flex items-center space-x-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold"
-                            >
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>Report</span>
-                            </button>
-                            <div className="flex items-center space-x-1">
-                                <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: resolveComplaints(c.chief_complaint), diagnosis: resolveDiagnosis(c.diagnosis), physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                <button onClick={() => window.location.href = `/bills?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Invoice"><Receipt className="w-4 h-4" /></button>
-                            </div>
-                        </div>
-                    </div>
-                ))}
-            </div>
-
-            {/* 💻 Desktop Table View (>= md) */}
-            <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
-                            <thead>
-                                <tr className="bg-blue-600 text-white text-xs uppercase tracking-wide">
-                                    <th className="px-4 py-3 text-left border-r border-blue-500 w-8">#</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Patient</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Date</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Doctor</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Complaints</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Diagnosis</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Follow Up</th>
-                                    <th className="px-4 py-3 text-left border-r border-blue-500">Status</th>
-                                    <th className="px-4 py-3 text-center">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {paginated.map((c, idx) => (
-                                    <tr key={c.id} className={`border-b border-gray-200 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700/50 transition-colors ${idx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-100 dark:bg-gray-800/60'}`}>
-                                        <td className="px-4 py-3 text-gray-500 border-r border-gray-200 dark:border-gray-700 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700">
-                                            <p className="font-semibold text-gray-900 dark:text-white">{c.patient?.full_name}</p>
-                                            <p className="text-xs text-gray-400">{c.patient?.patient_number}</p>
-                                        </td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 whitespace-nowrap text-xs text-gray-600 dark:text-gray-400">{new Date(c.created_at).toLocaleDateString()}</td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-700 dark:text-gray-300">Dr. {c.doctor?.full_name}</td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 max-w-[160px]">
-                                            <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={resolveComplaints(c.chief_complaint)}>{resolveComplaints(c.chief_complaint)}</p>
-                                        </td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 max-w-[160px]">
-                                            <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={resolveDiagnosis(c.diagnosis)}>{resolveDiagnosis(c.diagnosis)}</p>
-                                        </td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                                            {c.follow_up_period ? `${c.follow_up_period} ${c.follow_up_time}` : '—'}
-                                        </td>
-                                        <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700">
-                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${c.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{c.status}</span>
-                                        </td>
-                                        <td className="px-4 py-3">
-                                            <div className="flex items-center justify-center gap-1">
-                                                <button
-                                                    onClick={() => handleViewDetailed(c)}
-                                                    className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-md transition"
-                                                    title="View Detailed Report"
-                                                >
-                                                    <Eye className="w-4 h-4" />
-                                                </button>
-                                                <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: resolveComplaints(c.chief_complaint), diagnosis: resolveDiagnosis(c.diagnosis), physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                                                <button onClick={() => window.location.href = `/bills?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg" title="Invoice / Bill"><Receipt className="w-3.5 h-3.5" /></button>
-                                                <button onClick={() => setDeleteId(c.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    {/* Pagination */}
-                    <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
-                        <p className="text-xs text-gray-500">
-                            Showing {Math.min((currentPage - 1) * PAGE_SIZE + 1, filteredConsultations.length)}–{Math.min(currentPage * PAGE_SIZE, filteredConsultations.length)} of {filteredConsultations.length}
-                        </p>
-                        <div className="flex items-center gap-1">
-                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300">
-                                <ChevronLeft className="w-4 h-4" />
-                            </button>
-                            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                                const start = Math.max(1, currentPage - 2);
-                                const page = start + i;
-                                if (page > totalPages) return null;
-                                return (
-                                    <button key={page} onClick={() => setCurrentPage(page)}
-                                        className={`w-8 h-8 rounded-lg text-xs font-semibold border ${page === currentPage ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
-                                        {page}
+                                <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                                    <button
+                                        onClick={() => handleViewDetailed(c)}
+                                        className="flex items-center space-x-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold"
+                                    >
+                                        <Eye className="w-3.5 h-3.5" />
+                                        <span>Report</span>
                                     </button>
-                                );
-                            })}
-                            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300">
-                                <ChevronRight className="w-4 h-4" />
-                            </button>
+                                    <div className="flex items-center space-x-1">
+                                        {hasPermission('consultations', 'edit') && (
+                                            <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: resolveComplaints(c.chief_complaint), diagnosis: resolveDiagnosis(c.diagnosis), physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                        )}
+                                        <button onClick={() => handlePrintConsultation(c)} className="p-1.5 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg" title="Print Consultation"><Printer className="w-4 h-4" /></button>
+                                        <button onClick={() => handleDownloadPdfConsultation(c)} className="p-1.5 text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg" title="Download PDF"><Download className="w-4 h-4" /></button>
+                                        {(hasPermission('billing', 'add') || hasPermission('billing', 'view')) && (
+                                            <button onClick={() => window.location.href = `/bills?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Invoice"><Receipt className="w-4 h-4" /></button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* 💻 Desktop Table View (>= md) */}
+                    <div className="hidden md:block bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm border-collapse border border-gray-200 dark:border-gray-700">
+                                <thead>
+                                    <tr className="bg-blue-600 text-white text-xs uppercase tracking-wide">
+                                        <th className="px-4 py-3 text-left border-r border-blue-500 w-8">#</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Patient</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Date</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Doctor</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Complaints</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Diagnosis</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Follow Up</th>
+                                        <th className="px-4 py-3 text-left border-r border-blue-500">Status</th>
+                                        <th className="px-4 py-3 text-center">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {paginated.map((c, idx) => (
+                                        <tr key={c.id} className={`border-b border-gray-200 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700/50 transition-colors ${idx % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-100 dark:bg-gray-800/60'}`}>
+                                            <td className="px-4 py-3 text-gray-500 border-r border-gray-200 dark:border-gray-700 text-xs">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700">
+                                                <p className="font-semibold text-gray-900 dark:text-white">{c.patient?.full_name}</p>
+                                                <p className="text-xs text-gray-400">{c.patient?.patient_number}</p>
+                                            </td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 whitespace-nowrap text-xs text-gray-600 dark:text-gray-400">{new Date(c.created_at).toLocaleDateString()}</td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-700 dark:text-gray-300">Dr. {c.doctor?.full_name}</td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 max-w-[160px]">
+                                                <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={resolveComplaints(c.chief_complaint)}>{resolveComplaints(c.chief_complaint)}</p>
+                                            </td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 max-w-[160px]">
+                                                <p className="text-xs text-gray-700 dark:text-gray-300 truncate" title={resolveDiagnosis(c.diagnosis)}>{resolveDiagnosis(c.diagnosis)}</p>
+                                            </td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                                                {c.follow_up_period ? `${c.follow_up_period} ${c.follow_up_time}` : '—'}
+                                            </td>
+                                            <td className="px-4 py-3 border-r border-gray-200 dark:border-gray-700">
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${c.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{c.status}</span>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="flex items-center justify-center gap-1">
+                                                    <button
+                                                        onClick={() => handleViewDetailed(c)}
+                                                        className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-md transition"
+                                                        title="View Detailed Report"
+                                                    >
+                                                        <Eye className="w-4 h-4" />
+                                                    </button>
+                                                    {hasPermission('consultations', 'edit') && (
+                                                        <button onClick={() => { setEditConsultation(c); setEditForm({ chief_complaint: resolveComplaints(c.chief_complaint), diagnosis: resolveDiagnosis(c.diagnosis), physical_examination: c.physical_examination, treatment_plan: c.treatment_plan, notes: c.notes, status: c.status, follow_up_period: c.follow_up_period, follow_up_time: c.follow_up_time, follow_up_date: c.follow_up_date }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                                                    )}
+                                                    <button onClick={() => handlePrintConsultation(c)} className="p-1.5 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg" title="Print Consultation"><Printer className="w-3.5 h-3.5" /></button>
+                                                    <button onClick={() => handleDownloadPdfConsultation(c)} className="p-1.5 text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg" title="Download PDF"><Download className="w-3.5 h-3.5" /></button>
+                                                    {(hasPermission('billing', 'add') || hasPermission('billing', 'view')) && (
+                                                        <button onClick={() => window.location.href = `/bills?patientId=${c.patient_id}&consultationId=${c.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg" title="Invoice / Bill"><Receipt className="w-3.5 h-3.5" /></button>
+                                                    )}
+                                                    {hasPermission('consultations', 'delete') && (
+                                                        <button onClick={() => setDeleteId(c.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Pagination */}
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+                            <p className="text-xs text-gray-500">
+                                Showing {Math.min((currentPage - 1) * PAGE_SIZE + 1, filteredConsultations.length)}–{Math.min(currentPage * PAGE_SIZE, filteredConsultations.length)} of {filteredConsultations.length}
+                            </p>
+                            <div className="flex items-center gap-1">
+                                <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300">
+                                    <ChevronLeft className="w-4 h-4" />
+                                </button>
+                                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                                    const start = Math.max(1, currentPage - 2);
+                                    const page = start + i;
+                                    if (page > totalPages) return null;
+                                    return (
+                                        <button key={page} onClick={() => setCurrentPage(page)}
+                                            className={`w-8 h-8 rounded-lg text-xs font-semibold border ${page === currentPage ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
+                                            {page}
+                                        </button>
+                                    );
+                                })}
+                                <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300">
+                                    <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
                 </>
             )}
 
@@ -1277,9 +1388,33 @@ export function Consultations() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label className={labelCls}>Main Complaints</label><textarea value={editForm.chief_complaint || ''} onChange={e => setEditForm(f => ({ ...f, chief_complaint: e.target.value }))} className={`${inputCls} resize-none`} rows={3} /></div>
                                 <div><label className={labelCls}>Diagnosis</label><textarea value={editForm.diagnosis || ''} onChange={e => setEditForm(f => ({ ...f, diagnosis: e.target.value }))} className={`${inputCls} resize-none`} rows={3} /></div>
-                                <div><label className={labelCls}>Observations</label><textarea value={editForm.physical_examination || ''} onChange={e => setEditForm(f => ({ ...f, physical_examination: e.target.value }))} className={`${inputCls} resize-none`} rows={4} /></div>
-                                <div><label className={labelCls}>Treatment Plan</label><textarea value={editForm.treatment_plan || ''} onChange={e => setEditForm(f => ({ ...f, treatment_plan: e.target.value }))} className={`${inputCls} resize-none`} rows={4} /></div>
-                                <div><label className={labelCls}>Remarks</label><textarea value={editForm.notes || ''} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} className={`${inputCls} resize-none`} rows={3} /></div>
+                                <div>
+                                    <label className={labelCls}>Observations</label>
+                                    <RichTextEditor
+                                        value={editForm.physical_examination || ''}
+                                        onChange={val => setEditForm(f => ({ ...f, physical_examination: val }))}
+                                        placeholder="Clinical observations..."
+                                        minHeight="140px"
+                                    />
+                                </div>
+                                <div>
+                                    <label className={labelCls}>Treatment Plan</label>
+                                    <RichTextEditor
+                                        value={editForm.treatment_plan || ''}
+                                        onChange={val => setEditForm(f => ({ ...f, treatment_plan: val }))}
+                                        placeholder="Treatment plan..."
+                                        minHeight="140px"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className={labelCls}>Remarks</label>
+                                    <RichTextEditor
+                                        value={editForm.notes || ''}
+                                        onChange={val => setEditForm(f => ({ ...f, notes: val }))}
+                                        placeholder="Remarks..."
+                                        minHeight="120px"
+                                    />
+                                </div>
                                 <div className="space-y-3">
                                     <div><label className={labelCls}>Status</label>
                                         <select value={editForm.status || ''} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className={inputCls}>
@@ -1342,7 +1477,7 @@ export function Consultations() {
                                                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
                                             </span>
                                             <p className="text-sm font-bold text-blue-900 dark:text-blue-200">
-                                                {!formData.patient_id 
+                                                {!formData.patient_id
                                                     ? "⚠️ Please select a patient first to enable AI Note Smart-Paste."
                                                     : "Have an AI generated consultation note (e.g. Freed AI)?"
                                                 }
@@ -1352,11 +1487,10 @@ export function Consultations() {
                                             type="button"
                                             disabled={!formData.patient_id}
                                             onClick={() => setShowSmartPastePanel(true)}
-                                            className={`px-3.5 py-1.5 text-white rounded-lg text-xs font-black uppercase tracking-wider transition shadow-sm ${
-                                                !formData.patient_id 
-                                                    ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed' 
+                                            className={`px-3.5 py-1.5 text-white rounded-lg text-xs font-black uppercase tracking-wider transition shadow-sm ${!formData.patient_id
+                                                    ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
                                                     : 'bg-blue-600 hover:bg-blue-700'
-                                            }`}
+                                                }`}
                                         >
                                             ✨ Smart-Paste Note
                                         </button>
@@ -1389,11 +1523,10 @@ export function Consultations() {
                                                     setSmartParseMode('autofill');
                                                     setParsedResult(null);
                                                 }}
-                                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-md transition ${
-                                                    smartParseMode === 'autofill'
+                                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-md transition ${smartParseMode === 'autofill'
                                                         ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-white shadow-sm'
                                                         : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
-                                                }`}
+                                                    }`}
                                             >
                                                 ⚡ Auto-Fill Form &amp; Edit
                                             </button>
@@ -1403,11 +1536,10 @@ export function Consultations() {
                                                     setSmartParseMode('raw');
                                                     setParsedResult(null);
                                                 }}
-                                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-md transition ${
-                                                    smartParseMode === 'raw'
+                                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-md transition ${smartParseMode === 'raw'
                                                         ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-white shadow-sm'
                                                         : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'
-                                                }`}
+                                                    }`}
                                             >
                                                 📝 Quick-Save Raw Note
                                             </button>
@@ -1612,17 +1744,21 @@ export function Consultations() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className={sectionTitle}>Observations</label>
-                                    <textarea value={formData.physical_examination}
-                                        onChange={e => setFormData(prev => ({ ...prev, physical_examination: e.target.value }))}
-                                        className={`${inputCls} resize-none`} rows={6}
-                                        placeholder="Enter clinical observations and examination findings..." />
+                                    <RichTextEditor
+                                        value={formData.physical_examination}
+                                        onChange={val => setFormData(prev => ({ ...prev, physical_examination: val }))}
+                                        placeholder="Enter clinical observations and examination findings..."
+                                        minHeight="140px"
+                                    />
                                 </div>
                                 <div>
                                     <label className={sectionTitle}>Treatment Plan</label>
-                                    <textarea value={formData.treatment_plan}
-                                        onChange={e => setFormData(prev => ({ ...prev, treatment_plan: e.target.value }))}
-                                        className={`${inputCls} resize-none`} rows={6}
-                                        placeholder="Enter treatment plan, medications, and recommendations..." />
+                                    <RichTextEditor
+                                        value={formData.treatment_plan}
+                                        onChange={val => setFormData(prev => ({ ...prev, treatment_plan: val }))}
+                                        placeholder="Enter treatment plan, medications, and recommendations..."
+                                        minHeight="140px"
+                                    />
                                 </div>
                             </div>
 
@@ -1671,10 +1807,12 @@ export function Consultations() {
                             {/* Remarks */}
                             <div>
                                 <label className={sectionTitle}>Remarks</label>
-                                <textarea value={formData.notes}
-                                    onChange={e => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-                                    className={`${inputCls} resize-none`} rows={4}
-                                    placeholder="Additional remarks or notes..." />
+                                <RichTextEditor
+                                    value={formData.notes}
+                                    onChange={val => setFormData(prev => ({ ...prev, notes: val }))}
+                                    placeholder="Additional remarks or notes..."
+                                    minHeight="120px"
+                                />
                             </div>
 
                             <div className="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
@@ -1697,7 +1835,7 @@ export function Consultations() {
                                     <SearchDropdown
                                         label="Select Medicine"
                                         placeholder="Search Medicine..."
-                                        items={medicines.map(m => ({ id: m.id, label: m.dosage ? `${m.name} (${m.dosage})` : m.name }))}
+                                        items={medicines.map(m => ({ id: m.id, label: `Name : ${m.name || '-'} | Dosage : ${m.dosage || '-'} | Route : ${m.route || '-'} | Frequency : ${m.frequency || '-'}` }))}
                                         selected={[]}
                                         singleValue={medicines.find(m => m.id === newRx.medicine_id)?.name || ''}
                                         onSelect={(id) => setNewRx(r => ({ ...r, medicine_id: id }))}

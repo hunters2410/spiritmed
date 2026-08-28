@@ -1,0 +1,282 @@
+======================================================================
+PATIENT (5).SQL DUPLICATE ANALYSIS REPORT
+Generated: 2026-08-04 08:10:31
+Total records in file: 8422
+======================================================================
+
+[1] DUPLICATE MySQL ID (id column) - 0 groups
+
+[2] DUPLICATE patient_id - 62 groups
+  patient_id=1167:
+    id=4959, name='COLLAN CHIDAVARIMA', phone=263773909625, file=4930, added=11/27/23
+    id=8448, name='Alexis Maseka', phone=263777684166, file=1682, added=06/11/26
+  patient_id=137953:
+    id=4173, name='Hussein Eca  Kizito', phone=263789912403, file=4181, added=11/07/23
+    id=8085, name='Flaviano Rukwere', phone=263773197318, file=None, added=03/11/26
+  patient_id=1468:
+    id=6390, name='Nicodemus Machingauta', phone=263718065561, file=-, added=12/07/24
+    id=8016, name='George Wachenuka', phone=263784723201, file=6295, added=02/20/26
+  patient_id=150146:
+    id=2417, name='Brian Nyamuziwa ', phone=263776212538, file=2419, added=11/07/23
+    id=8003, name='Wilfred Gware', phone=263772486038, file=1008, added=02/18/26
+  patient_id=1527:
+    id=5768, name='Roy Tafadzwa Muzoriwa', phone=263772913838, file=5527, added=07/03/24
+    id=8705, name='Raynold Nyandebvu Gnokodza', phone=263773151505, file=0692, added=08/03/26
+  patient_id=157108:
+    id=5809, name='David Chauke', phone=263788625955, file=5572, added=07/16/24
+    id=6045, name='Tozivepi Simon Mhondiwa', phone=0773245704, file=None, added=09/12/24
+  patient_id=1765:
+    id=4636, name='Peter Mtemeri', phone=263773418599, file=2043, added=09/06/23
+    id=8636, name='Nagin Bawa', phone=26771782908, file=1538, added=07/20/26
+  patient_id=1813:
+    id=5174, name='VICTOR CHINYANI', phone=263786653332, file=4522, added=01/26/24
+    id=5983, name='Maria Nyakunu', phone=263777666868, file=5683, added=08/28/24
+  patient_id=207635:
+    id=2512, name='Francis Muchena ', phone=263734481864, file=2514, added=11/07/23
+    id=8597, name='Stanley Muchemwa', phone=263772446255, file=None, added=07/13/26
+  patient_id=2144:
+    id=4958, name='JERE JAKA', phone=+263772367690, file=4952, added=11/27/23
+    id=5273, name='Dionne Mutsikadawo', phone=263717868079, file=5161, added=02/22/24
+  patient_id=251237:
+    id=2639, name='Patient2642', phone=26377, file=2642, added=11/07/23
+    id=6999, name='Thomas Done', phone=263773254354, file=None, added=05/19/25
+  patient_id=289696:
+    id=5802, name='Irene Muramba', phone=263 77 238 3166, file=None, added=07/11/24
+    id=7684, name='Tendaishe Muza', phone=263774229856, file=None, added=11/06/25
+  patient_id=2983:
+    id=5354, name='Colin Galloway', phone=263779497165, file=5232, added=03/18/24
+    id=8571, name='Victor Mupanhwa', phone=263772603261, file=1530, added=07/07/26
+  patient_id=299109:
+    id=2435, name='Craig Kundai Yakobe ', phone=263780559883, file=2437, added=11/07/23
+    id=5301, name='Gerald Nhunhama', phone=263776462382, file=None, added=02/27/24
+  patient_id=3377:
+    id=6636, name='Tawana Mapfumo', phone=263772326579, file=6160, added=02/18/25
+    id=7687, name='Cleopas Nyamadzawo', phone=263772903343, file=6404, added=11/10/25
+  patient_id=363697:
+    id=1931, name='Tawanda Chakanetsa ', phone=263775041301, file=1931, added=11/07/23
+    id=5887, name='Takunda Kanyonganise', phone=263779494311, file=5628, added=08/08/24
+  patient_id=377447:
+    id=5006, name='Irene Mutanga', phone=-, file=4965, added=12/07/23
+    id=5840, name='Peter Mudzamiri', phone=263772670195, file=5603, added=07/25/24
+  patient_id=3919:
+    id=6808, name='Nashe Christian Chimbgha', phone=263773589199, file=6301, added=04/03/25
+    id=8522, name='Mohamed Latif', phone=263772330299, file=1622, added=06/30/26
+  patient_id=414033:
+    id=2923, name='Liam M. Mandengu', phone=263772641414, file=2926, added=11/07/23
+    id=8460, name='Richard Mauppah', phone=263773863451, file=1680, added=06/15/26
+  patient_id=4170:
+    id=6442, name='Christian Banda', phone=263772995570, file=6032, added=12/20/24
+    id=7078, name='Mukudzeishe Nhongo', phone=263775786285, file=5341, added=06/09/25
+  patient_id=4364:
+    id=4553, name='Wilbur Kamhere', phone=263772319791, file=2637, added=08/10/23
+    id=6945, name='Anthony Nembaware', phone=263778730837, file=6392, added=05/05/25
+  patient_id=4531:
+    id=6476, name='Rodrick Makumborenga', phone=263774747524, file=6049, added=01/10/25
+    id=7596, name='Christopher Wesley Tande', phone=263779034110, file=0430, added=10/10/25
+  patient_id=4679:
+    id=4769, name='Monica Dzvairo', phone=263774629646, file=4782, added=10/05/23
+    id=8615, name='Rebecca Conlon', phone=263772145105, file=1344, added=07/15/26
+  patient_id=4894:
+    id=7774, name=' Manuel  Mukanya-Makawa', phone=263773278569, file=0803, added=12/03/25
+    id=8598, name='Poshe Paridzirai', phone=263784028346, file=1659, added=07/13/26
+  patient_id=506135:
+    id=3592, name='Odette Yabaragiye ', phone=263734422373, file=3595, added=11/07/23
+    id=4208, name='Malaini Mbaiwa Mambo', phone=263772260499, file=4217, added=11/07/23
+  patient_id=5091:
+    id=5461, name='Jaffar Krisht', phone=263778333322, file=5298, added=04/15/24
+    id=8255, name='Ronald Mapfumo', phone=263772648385, file=0970, added=04/28/26
+  patient_id=526572:
+    id=1890, name='Mack Nkoma', phone=263773028564, file=1890, added=11/07/23
+    id=2346, name='Lucas Pande Tavaua ', phone=263782409160, file=2348, added=11/07/23
+  patient_id=5342:
+    id=4873, name='Never Musakwa', phone=263772513116, file=4832, added=11/03/23
+    id=8217, name='Shane Stockil', phone=263772308757, file=0634, added=04/21/26
+  patient_id=538070:
+    id=2010, name='Milton Chigumbu ', phone=263773572910, file=2010, added=11/07/23
+    id=6904, name='Givemore Midzi', phone=263772490268, file=6373, added=04/25/25
+  patient_id=554516:
+    id=4153, name='Edward kaseke Murombedzi', phone=263772520505, file=4161, added=11/07/23
+    id=4378, name='Shellie Mashumba ', phone=263772491344, file=4388, added=11/07/23
+  patient_id=6240:
+    id=4524, name='Vinodbhai Rama', phone=263772432701, file=4601, added=08/04/23
+    id=8028, name='Angeline Chibondo', phone=263773840225, file=5511, added=02/25/26
+  patient_id=641570:
+    id=2497, name='Geraldn Armstrong ', phone=263777082444, file=2499, added=11/07/23
+    id=5409, name='Orvin Majongwe', phone=263773260320, file=None, added=04/03/24
+  patient_id=6529:
+    id=4519, name='Manoj Kumar', phone=263777984985, file=4594, added=08/02/23
+    id=8624, name='Tellmore Mukarakate', phone=263772671062, file=1607, added=07/17/26
+  patient_id=6588:
+    id=5257, name='Lovemore Mungeni', phone=263772868137, file=5150, added=02/16/24
+    id=7944, name='Mathias Chinanayi', phone=263772226264, file=0731, added=01/30/26
+  patient_id=687101:
+    id=1244, name='Simbarashe Pfekerai', phone=263772677677, file=1244, added=11/07/23
+    id=3270, name='Elvin Masinire ', phone=263772588301, file=3273, added=11/07/23
+  patient_id=6945:
+    id=4601, name='Edmond Mupfumi', phone=263774136156, file=4524, added=08/22/23
+    id=6025, name='Steven Gardini', phone=263773164523, file=5724, added=09/06/24
+  patient_id=7094:
+    id=4479, name='Richard Dennison', phone=263771740994, file=4562, added=07/26/23
+    id=4878, name='Reuben Muvhurami', phone=23775520944, file=4866, added=11/06/23
+  patient_id=710043:
+    id=592, name='Farai Magama', phone=263772485906, file=0592, added=11/07/23
+    id=7040, name='Saymore Gopo', phone=263712878438, file=6478, added=05/29/25
+  patient_id=714758:
+    id=523, name='Wisdom Samanyai', phone=263774890656, file=0523, added=11/07/23
+    id=2751, name='Sabastien usaiwevu Marufu', phone=263778284421, file=2754, added=11/07/23
+  patient_id=7216:
+    id=4485, name='Nathaniel Mohammed', phone=263, file=4561, added=07/26/23
+    id=4557, name='Jochova Zvakavapano', phone=263777889167, file=4612, added=08/11/23
+  patient_id=722396:
+    id=7499, name='Enoch Munyenyiwa', phone=263778900303, file=0453, added=09/15/25
+    id=8533, name='Victor Nyamurova', phone=263773600611, file=1653, added=06/30/26
+  patient_id=7670:
+    id=5233, name='Tonderai Masuku', phone=263712621207, file=5128, added=02/09/24
+    id=7662, name='Isaac Kuvarega', phone=263777514016, file=0115, added=10/29/25
+  patient_id=7727:
+    id=4543, name='Matthew Machisa', phone=263715307417, file=4615, added=08/09/23
+    id=6387, name='Wunganai Chakwenya', phone=263772271551, file=-, added=12/07/24
+  patient_id=7752:
+    id=4641, name='Clement Mbizvo', phone=263716567330, file=4472, added=09/06/23
+    id=5611, name='Thulani Mututa', phone=263772667099, file=5396, added=05/24/24
+  patient_id=78085:
+    id=3875, name='Tawananyasha S. Murindagomo', phone=263777169600, file=3878, added=11/07/23
+    id=6028, name='Walter Mafukidze', phone=263772927541, file=5727, added=09/09/24
+  patient_id=7892:
+    id=4443, name='Tawedzera Shadaya', phone=263772700974, file=4498, added=07/14/23
+    id=6712, name='Batsirai Ngadze', phone=-, file=6236, added=03/11/25
+  patient_id=8040:
+    id=5464, name='Hubert Mutendi', phone=263714141658T04, file=5301, added=04/15/24
+    id=6782, name='Elizabeth Mutukwa', phone=263774899264, file=6267, added=03/25/25
+  patient_id=8160:
+    id=4548, name='Chamunorwa Zhakata', phone=263776613213, file=4618, added=08/09/23
+    id=8364, name='Anastasia Mangombe', phone=263713665849, file=1565, added=05/26/26
+  patient_id=828143:
+    id=899, name='Chemani Stanislaus Tuturu', phone=263772876558, file=0899, added=11/07/23
+    id=1393, name='Itai Mupfudze ', phone=263773822980, file=1393, added=11/07/23
+  patient_id=8369:
+    id=4518, name='Joshua Magwaro', phone=263, file=4596, added=08/02/23
+    id=4897, name='Joshua Choga', phone=263783030709, file=4879, added=11/09/23
+  patient_id=837386:
+    id=3627, name='Tawanda C. Mandisodza', phone=263772368652, file=3630, added=11/07/23
+    id=6719, name='Maxwell Kazuwarara', phone=263773099755, file=6234, added=03/12/25
+  patient_id=841269:
+    id=2612, name='Nigel Berverly Mataga ', phone=263778831947, file=2614, added=11/07/23
+    id=6597, name='Clarence Mpala', phone=263772316623, file=6155, added=02/10/25
+  patient_id=8653:
+    id=4872, name='Emmanuel Dick', phone=263773060973, file=4856, added=11/03/23
+    id=7164, name='Roy Musasiwa', phone=263772220084, file=0016, added=06/30/25
+  patient_id=865430:
+    id=1018, name='Muduwa pilot', phone=263774435292, file=1018, added=11/07/23
+    id=5418, name='Paula Widdows', phone=263784527238, file=5283, added=04/05/24
+  patient_id=867350:
+    id=3211, name='John William Crundale ', phone=263712613825, file=3214, added=11/07/23
+    id=6223, name='Gedion Muzvongi', phone=263772417005, file=5870, added=10/28/24
+  patient_id=888947:
+    id=4568, name='Eliza Mapamba', phone=263772766957, file=None, added=08/16/23
+    id=5506, name='RUMBIDZAI KATIVHU', phone=263785308888, file=None, added=04/30/24
+  patient_id=8927:
+    id=4545, name='Suspicion Masvingwa', phone=263772317558, file=4617, added=08/09/23
+    id=7930, name='Damiano Zavazava', phone=263773437555, file=0826, added=01/27/26
+  patient_id=906052:
+    id=1048, name='Christopher Nyambayo', phone=2637752243392, file=1048, added=11/07/23
+    id=2979, name='Calvin L. Marais', phone=263772777400, file=2982, added=11/07/23
+  patient_id=9520:
+    id=6951, name='Gianni Mashezha', phone=263773753735, file=6394, added=05/06/25
+    id=8081, name='Imtiaz Kurawley', phone=263777002844, file=1078, added=03/10/26
+  patient_id=953871:
+    id=879, name='Vundra Koki', phone=263785967911, file=0879, added=11/07/23
+    id=4101, name='Kennedy Makaza', phone=263775200457, file=4109, added=11/07/23
+  patient_id=9746:
+    id=4680, name='Luke Gonde', phone=263772869535, file=4716 , added=09/18/23
+    id=7652, name='Denzil Chivinge', phone=263772897933, file=0397, added=10/24/25
+  patient_id=998734:
+    id=760, name='Mahomed Mussa', phone=263772100869, file=0760, added=11/07/23
+    id=1262, name='Wedley Mhashu', phone=263783847080, file=1262, added=11/07/23
+
+[3] DUPLICATE name + phone - 16 groups
+  name='alistair chakanyuka' phone='263772319618':
+    id=8423, patient_id=374774, file=None, added=06/08/26
+    id=8450, patient_id=6735, file=1668, added=06/11/26
+  name='andrea kondonis' phone='':
+    id=1401, patient_id=223207, file=1401, added=11/07/23
+    id=1402, patient_id=938320, file=1402, added=11/07/23
+  name='anyway matambanashe' phone='263772577164':
+    id=3745, patient_id=971481, file=3748, added=11/07/23
+    id=4583, patient_id=208871, file=None, added=08/17/23
+  name='gamuchirai ruredzo' phone='263772134100':
+    id=2413, patient_id=671700, file=2415, added=11/07/23
+    id=4476, patient_id=1782, file=4569, added=07/24/23
+  name='godfrey nehanda' phone='263772100222':
+    id=1504, patient_id=38001, file=1502, added=11/07/23
+    id=4804, patient_id=40350, file=None, added=10/13/23
+  name='mandlaenkosi hlatshwayo' phone='263777267071':
+    id=4977, patient_id=464692, file=4952, added=11/30/23
+    id=4997, patient_id=186966, file=4952, added=12/04/23
+  name='masimba chandavengerwa' phone='263772131897':
+    id=7750, patient_id=723184, file=None, added=11/26/25
+    id=7814, patient_id=8426, file=0758, added=12/11/25
+  name='pamela chapani' phone='263771255423':
+    id=5941, patient_id=58251, file=None, added=08/21/24
+    id=5960, patient_id=2942, file=5673, added=08/26/24
+  name='tafadzwa gondo' phone='263775159380':
+    id=3179, patient_id=667801, file=3182, added=11/07/23
+    id=8584, patient_id=325399, file=None, added=07/09/26
+  name='takaedza matambo' phone='263719706593':
+    id=8350, patient_id=922905, file=None, added=05/20/26
+    id=8377, patient_id=6378, file=1619, added=05/27/26
+  name='thomas mbana' phone='263789421064':
+    id=5532, patient_id=182092, file=None, added=05/07/24
+    id=5574, patient_id=527284, file=None, added=05/17/24
+  name='tinashe mudzuka' phone='263776446801':
+    id=3749, patient_id=35859, file=3752, added=11/07/23
+    id=6127, patient_id=547094, file=None, added=10/04/24
+  name='tinotenda mungwariri' phone='263775224852':
+    id=7357, patient_id=846865, file=None, added=08/18/25
+    id=7376, patient_id=7931, file=0129, added=08/20/25
+  name='wallace gwiza' phone='263775094043':
+    id=5939, patient_id=826316, file=None, added=08/21/24
+    id=5969, patient_id=1246, file=5678, added=08/26/24
+  name='washington makuyana' phone='263783591721':
+    id=6063, patient_id=633869, file=5804, added=09/17/24
+    id=8656, patient_id=562592, file=None, added=07/22/26
+  name='william goto' phone='263772912561':
+    id=263, patient_id=289360, file=0263, added=11/07/23
+    id=3117, patient_id=354631, file=3120, added=11/07/23
+
+[4] DUPLICATE name + DOB - 8 groups
+  name='bakhetisi mlalazi' dob='1957-12-07':
+    id=1442, patient_id=346512, phone=263779596079, added=11/07/23
+    id=1443, patient_id=724442, phone=263779596078, added=11/07/23
+  name='eddie mabvurunge' dob='1936-02-28':
+    id=303, patient_id=657618, phone=263733572735, added=11/07/23
+    id=3388, patient_id=990652, phone=263772351490, added=11/07/23
+  name='gamuchirai ruredzo' dob='2005-06-14':
+    id=2413, patient_id=671700, phone=263772134100, added=11/07/23
+    id=4476, patient_id=1782, phone=263772134100, added=07/24/23
+  name='mandlaenkosi hlatshwayo' dob='2001-02-01':
+    id=4977, patient_id=464692, phone=263777267071, added=11/30/23
+    id=4997, patient_id=186966, phone=263777267071, added=12/04/23
+  name='samuel muchemwa' dob='1969-02-19':
+    id=2296, patient_id=41216, phone=263712801355, added=11/07/23
+    id=4999, patient_id=174615, phone=2630712801355, added=12/05/23
+  name='tambudzai mukajami' dob='1984-03-04':
+    id=295, patient_id=578903, phone=263773766972, added=11/07/23
+    id=1178, patient_id=998055, phone=263771703008, added=11/07/23
+  name='violet mutesva' dob='1972-02-15':
+    id=1885, patient_id=851428, phone=263778597470, added=11/07/23
+    id=3497, patient_id=764772, phone=263773046465, added=11/07/23
+  name='william goto' dob='1944-01-22':
+    id=263, patient_id=289360, phone=263772912561, added=11/07/23
+    id=3117, patient_id=354631, phone=263772912561, added=11/07/23
+
+======================================================================
+SUMMARY:
+  Total records                : 8422
+  Unique MySQL id records      : 8422
+  Dup MySQL id groups          : 0
+  Dup patient_id groups        : 62
+  Dup name+phone groups        : 16
+  Dup name+DOB groups          : 8
+  Records involved in any dup  : 166
+======================================================================

@@ -36,18 +36,28 @@ export function ExpenseCategories() {
         setLoading(true);
         try {
             const bid = profile?.branch_id;
-            let query = supabase
-                .from('expense_categories')
-                .select('*')
-                .order('name', { ascending: true });
+            let allCats: any[] = [];
+            let from = 0;
+            const pageSize = 1000;
+            while (true) {
+                let query = supabase
+                    .from('expense_categories')
+                    .select('*')
+                    .order('name', { ascending: true })
+                    .range(from, from + pageSize - 1);
 
-            if (bid) {
-                query = query.eq('branch_id', bid);
+                if (bid) {
+                    query = query.eq('branch_id', bid);
+                }
+
+                const { data, error } = await query;
+                if (error) throw error;
+                if (!data || data.length === 0) break;
+                allCats = allCats.concat(data);
+                if (data.length < pageSize) break;
+                from += pageSize;
             }
-
-            const { data, error } = await query;
-            if (error) throw error;
-            setCategories(data || []);
+            setCategories(allCats);
         } catch (err: any) {
             console.error('Error loading categories:', err);
         } finally {

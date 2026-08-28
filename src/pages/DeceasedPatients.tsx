@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Search, Eye, Phone, Mail, Calendar, Download, Filter, Skull, X, FileSpreadsheet, FileJson, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Eye, Phone, Mail, Calendar, Download, Filter, Skull, X, FileSpreadsheet, FileJson, ChevronLeft, ChevronRight, History } from 'lucide-react';
 import { exportToExcel, exportToPDF } from '../utils/exportUtils';
 
 interface Patient {
@@ -43,21 +43,31 @@ export function DeceasedPatients() {
     if (!profile?.branch_id && profile?.role !== 'super_admin') return;
 
     try {
-      let query = supabase
-        .from('patients')
-        .select('*, bills(balance)')
-        .eq('status', 'deceased')
-        .order('deceased_date', { ascending: false });
+      let allPatients: any[] = [];
+      let from = 0;
+      const pageSize = 1000;
 
-      if (profile.role !== 'super_admin') {
-        query = query.eq('branch_id', profile.branch_id);
+      while (true) {
+        let query = supabase
+          .from('patients')
+          .select('*, bills(balance)')
+          .eq('status', 'deceased')
+          .order('deceased_date', { ascending: false })
+          .range(from, from + pageSize - 1);
+
+        if (profile.role !== 'super_admin') {
+          query = query.eq('branch_id', profile.branch_id);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allPatients = allPatients.concat(data);
+        if (data.length < pageSize) break;
+        from += pageSize;
       }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
       
-      const patientsWithDue = (data || []).map((p: any) => ({
+      const patientsWithDue = allPatients.map((p: any) => ({
         ...p,
         total_due: p.bills?.reduce((sum: number, inv: any) => sum + (inv.balance || 0), 0) || 0
       }));
@@ -315,13 +325,20 @@ export function DeceasedPatients() {
                 </div>
               )}
 
-              <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-end">
+              <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-end gap-2">
                 <button
                   onClick={() => openViewModal(patient)}
                   className="flex items-center space-x-1.5 px-3 py-1.5 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-lg text-xs font-bold hover:bg-green-100 transition"
                 >
                   <Eye className="w-3.5 h-3.5" />
                   <span>View Details</span>
+                </button>
+                <button
+                  onClick={() => window.location.href = `/patient-history?patientId=${patient.id}`}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-lg text-xs font-bold hover:bg-purple-100 transition"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  <span>History</span>
                 </button>
               </div>
             </div>
@@ -425,13 +442,22 @@ export function DeceasedPatients() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium border-b border-gray-200 dark:border-gray-700">
-                      <button
-                        onClick={() => openViewModal(patient)}
-                        className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300"
-                        title="View Details"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openViewModal(patient)}
+                          className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition"
+                          title="View Details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => window.location.href = `/patient-history?patientId=${patient.id}`}
+                          className="p-1.5 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition"
+                          title="Patient History"
+                        >
+                          <History className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -440,9 +466,8 @@ export function DeceasedPatients() {
           </table>
         </div>
         
-        {/* Pagination */}
-        {filteredPatients.length > 0 && (
-          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4">
+        {/* Pagination — Always Visible */}
+        <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center space-x-4">
               <p className="text-xs text-gray-500">
                 Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredPatients.length)} of {filteredPatients.length}
@@ -501,7 +526,6 @@ export function DeceasedPatients() {
               </div>
             )}
           </div>
-        )}
       </div>
 
       {showViewModal && selectedPatient && (

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { createStaffUserAccount } from '../utils/userCreation';
-import { Plus, Search, Edit2, Eye, Phone, Calendar, Filter, X, Calculator } from 'lucide-react';
+import { Plus, Search, Edit2, Eye, Phone, Calendar, Filter, X, Calculator, Mail, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Accountant {
   id: string;
@@ -27,6 +27,11 @@ export function Accountants() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [selectedAccountant, setSelectedAccountant] = useState<Accountant | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(25);
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState({
     branch: 'all',
@@ -40,6 +45,79 @@ export function Accountants() {
     address: '',
     branch_id: ''
   });
+
+  const openViewModal = (accountant: Accountant) => {
+    setSelectedAccountant(accountant);
+    setShowViewModal(true);
+  };
+
+  const openEditModal = (accountant: Accountant) => {
+    setSelectedAccountant(accountant);
+    setFormData({
+      email: accountant.email || '',
+      password: '',
+      full_name: accountant.full_name || '',
+      phone: accountant.phone || '',
+      address: accountant.address || '',
+      branch_id: accountant.branch_id || ''
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAccountant) return;
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({
+          full_name: formData.full_name,
+          phone: formData.phone,
+          address: formData.address,
+          branch_id: formData.branch_id || selectedAccountant.branch_id
+        })
+        .eq('id', selectedAccountant.id);
+
+      if (error) throw error;
+
+      setShowEditModal(false);
+      setSelectedAccountant(null);
+      resetForm();
+      loadAccountants();
+    } catch (error: any) {
+      console.error('Error updating accountant:', error);
+      alert(error.message || 'Failed to update accountant');
+    }
+  };
+
+  const handleDeleteAccountant = async (accountant: Accountant) => {
+    if (accountant.id === profile?.id) {
+      alert('You cannot delete your own account.');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to permanently delete ${accountant.full_name}? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase.rpc('delete_user_account', {
+        p_user_id: accountant.id
+      });
+
+      if (error) {
+        const { error: delError } = await supabase.from('users').delete().eq('id', accountant.id);
+        if (delError) throw delError;
+      }
+
+      loadAccountants();
+    } catch (error: any) {
+      console.error('Error deleting accountant:', error);
+      alert(error.message || 'Failed to delete accountant');
+    }
+  };
+
 
   useEffect(() => {
     loadAccountants();
@@ -145,6 +223,9 @@ export function Accountants() {
     return matchesSearch && matchesBranch && matchesStatus;
   });
 
+  const totalPages = Math.ceil(filteredAccountants.length / itemsPerPage) || 1;
+  const paginatedAccountants = filteredAccountants.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -177,7 +258,10 @@ export function Accountants() {
               type="text"
               placeholder="Search accountants by name, email, or phone..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />
           </div>
@@ -198,7 +282,7 @@ export function Accountants() {
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Branch</label>
                   <select
                     value={filters.branch}
-                    onChange={(e) => setFilters({ ...filters, branch: e.target.value })}
+                    onChange={(e) => { setFilters({ ...filters, branch: e.target.value }); setCurrentPage(1); }}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   >
                     <option value="all">All Branches</option>
@@ -212,7 +296,7 @@ export function Accountants() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
                 <select
                   value={filters.status}
-                  onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                  onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setCurrentPage(1); }}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 >
                   <option value="all">All Statuses</option>
@@ -222,7 +306,7 @@ export function Accountants() {
               </div>
               <div className="flex items-end">
                 <button
-                  onClick={() => setFilters({ branch: 'all', status: 'all' })}
+                  onClick={() => { setFilters({ branch: 'all', status: 'all' }); setCurrentPage(1); }}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition"
                 >
                   Clear Filters
@@ -236,53 +320,53 @@ export function Accountants() {
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse border border-gray-200 dark:border-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+            <thead className="bg-gray-100 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-700">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-black uppercase text-gray-600 dark:text-gray-300 tracking-wider">
                   Accountant
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-black uppercase text-gray-600 dark:text-gray-300 tracking-wider">
                   Contact
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-black uppercase text-gray-600 dark:text-gray-300 tracking-wider">
                   Status
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-black uppercase text-gray-600 dark:text-gray-300 tracking-wider">
                   Joined
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-6 py-3 text-center text-xs font-black uppercase text-gray-600 dark:text-gray-300 tracking-wider">
                   Actions
                 </th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {filteredAccountants.length === 0 ? (
+              {paginatedAccountants.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400 font-medium">
                     No accountants found
                   </td>
                 </tr>
               ) : (
-                filteredAccountants.map((accountant) => (
-                  <tr key={accountant.id} className="hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                paginatedAccountants.map((accountant) => (
+                  <tr key={accountant.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center">
                           <Calculator className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                         </div>
                         <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{accountant.full_name}</div>
+                          <div className="text-sm font-bold text-gray-900 dark:text-white">{accountant.full_name}</div>
                           <div className="text-sm text-gray-500 dark:text-gray-400">{accountant.email}</div>
                         </div>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900 dark:text-white flex items-center">
-                        <Phone className="w-3 h-3 mr-1 text-gray-400" />
+                      <div className="text-sm text-gray-900 dark:text-white flex items-center font-medium">
+                        <Phone className="w-3.5 h-3.5 mr-1 text-gray-400" />
                         {accountant.phone || 'N/A'}
                       </div>
                       {accountant.address && (
-                        <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                           {accountant.address}
                         </div>
                       )}
@@ -290,28 +374,43 @@ export function Accountants() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <button
                         onClick={() => handleToggleActive(accountant)}
-                        className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        className={`px-2.5 py-0.5 inline-flex text-xs uppercase font-black rounded-full border ${
                           accountant.is_active
-                            ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400'
-                            : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800'
+                            : 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
                         }`}
                       >
                         {accountant.is_active ? 'Active' : 'Inactive'}
                       </button>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900 dark:text-white flex items-center">
-                        <Calendar className="w-3 h-3 mr-1 text-gray-400" />
+                      <div className="text-sm text-gray-900 dark:text-white flex items-center font-medium">
+                        <Calendar className="w-3.5 h-3.5 mr-1 text-gray-400" />
                         {new Date(accountant.created_at).toLocaleDateString()}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <div className="flex space-x-2">
-                        <button className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-center">
+                      <div className="flex items-center justify-center space-x-1">
+                        <button
+                          onClick={() => openViewModal(accountant)}
+                          className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition"
+                          title="View Details"
+                        >
                           <Eye className="w-4 h-4" />
                         </button>
-                        <button className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300">
+                        <button
+                          onClick={() => openEditModal(accountant)}
+                          className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded transition"
+                          title="Edit Accountant"
+                        >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAccountant(accountant)}
+                          className="p-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition"
+                          title="Delete Accountant"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -321,6 +420,63 @@ export function Accountants() {
             </tbody>
           </table>
         </div>
+
+        {filteredAccountants.length > 0 && (
+          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700 flex flex-col md:flex-row items-center justify-between gap-4 font-sans">
+            <div className="flex items-center space-x-4">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Showing {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredAccountants.length)} of {filteredAccountants.length}
+              </p>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-gray-400 font-bold uppercase">Rows:</span>
+                <select
+                  value={itemsPerPage === filteredAccountants.length ? 'all' : itemsPerPage}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setItemsPerPage(val === 'all' ? filteredAccountants.length || 1 : Number(val));
+                    setCurrentPage(1);
+                  }}
+                  className="text-xs font-bold bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1 outline-none text-gray-700 dark:text-gray-200"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value="all">ALL</option>
+                </select>
+              </div>
+            </div>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => p - 1)}
+                  className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition"
+                >
+                  <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                </button>
+                {[...Array(Math.min(totalPages, 7))].map((_, i) => (
+                  <button
+                    key={i + 1}
+                    onClick={() => setCurrentPage(i + 1)}
+                    className={`w-8 h-8 rounded-lg text-xs font-bold transition ${currentPage === i + 1 ? 'bg-green-600 text-white' : 'border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700'}`}
+                  >
+                    {i + 1}
+                  </button>
+                ))}
+                {totalPages > 7 && <span className="text-xs text-gray-400 px-1">... {totalPages}</span>}
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => p + 1)}
+                  className="p-1.5 border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-30 hover:bg-white dark:hover:bg-gray-700 transition"
+                >
+                  <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
 
       {showModal && (
@@ -341,39 +497,37 @@ export function Accountants() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name *</label>
                 <input
                   type="text"
+                  required
                   value={formData.full_name}
                   onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  required
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email *</label>
-                  <input
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password *</label>
-                  <input
-                    type="password"
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    required
-                    minLength={6}
-                  />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email Address *</label>
+                <input
+                  type="email"
+                  required
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password *</label>
+                <input
+                  type="password"
+                  required
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number</label>
                 <input
                   type="tel"
                   value={formData.phone}
@@ -382,18 +536,17 @@ export function Accountants() {
                 />
               </div>
 
-              {profile?.role === 'super_admin' && (
+              {branches.length > 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Branch *</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Branch</label>
                   <select
                     value={formData.branch_id}
                     onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    required={profile?.role === 'super_admin'}
                   >
                     <option value="">Select Branch</option>
-                    {branches.map(branch => (
-                      <option key={branch.id} value={branch.id}>{branch.name}</option>
+                    {branches.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
                     ))}
                   </select>
                 </div>
@@ -422,6 +575,168 @@ export function Accountants() {
                   className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition shadow-md"
                 >
                   Add Accountant
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showViewModal && selectedAccountant && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center">
+                  <Calculator className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900 dark:text-white">{selectedAccountant.full_name}</h2>
+                  <p className="text-xs text-gray-500 font-medium">Accountant Account Details</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowViewModal(false); setSelectedAccountant(null); }}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <div className="py-5 space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-1">Email Address</span>
+                  <span className="font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-gray-400" />
+                    {selectedAccountant.email || 'N/A'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-1">Phone Number</span>
+                  <span className="font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-gray-400" />
+                    {selectedAccountant.phone || 'N/A'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-1">Status</span>
+                  <span className={`inline-flex px-2.5 py-0.5 text-xs font-bold rounded-full ${selectedAccountant.is_active ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'}`}>
+                    {selectedAccountant.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-1">Joined Date</span>
+                  <span className="font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-gray-400" />
+                    {new Date(selectedAccountant.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+              </div>
+
+              {selectedAccountant.address && (
+                <div>
+                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block mb-1">Home Address</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">{selectedAccountant.address}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-gray-100 dark:border-gray-700 flex justify-end gap-2">
+              <button
+                onClick={() => { setShowViewModal(false); openEditModal(selectedAccountant); }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition flex items-center gap-1.5"
+              >
+                <Edit2 className="w-3.5 h-3.5" /> Edit Accountant
+              </button>
+              <button
+                onClick={() => { setShowViewModal(false); setSelectedAccountant(null); }}
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg hover:bg-gray-200 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEditModal && selectedAccountant && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex justify-between items-center pb-4 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white">Edit Accountant Details</h2>
+              <button
+                onClick={() => { setShowEditModal(false); setSelectedAccountant(null); resetForm(); }}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="py-4 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.full_name}
+                  onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Phone Number</label>
+                <input
+                  type="tel"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Address</label>
+                <textarea
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
+              </div>
+
+              {branches.length > 0 && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Branch</label>
+                  <select
+                    value={formData.branch_id}
+                    onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="">Select Branch</option>
+                    {branches.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="pt-4 border-t border-gray-100 dark:border-gray-700 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowEditModal(false); setSelectedAccountant(null); resetForm(); }}
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-xs font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-bold transition"
+                >
+                  Save Changes
                 </button>
               </div>
             </form>

@@ -1,7 +1,8 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { Printer, ArrowLeft, Download, Send, Plus, Edit3 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { exportElementToPdf } from '../utils/exportUtils';
 
 /* ── Helpers ── */
 const formatDate = (dateStr?: string) => {
@@ -12,6 +13,14 @@ const formatDate = (dateStr?: string) => {
     const m = String(date.getMonth() + 1).padStart(2, '0');
     const y = date.getFullYear();
     return `${d}-${m}-${y}`;
+};
+
+const renderHtmlOrText = (text?: string) => {
+    if (!text) return '—';
+    if (/<[a-z][\s\S]*>/i.test(text)) {
+        return <div dangerouslySetInnerHTML={{ __html: text }} className="rich-text-content inline-block text-gray-800" />;
+    }
+    return text;
 };
 
 const parseAdvice = (adviceStr?: string) => {
@@ -56,6 +65,7 @@ interface PrescriptionItem {
     id: string;
     medicine_name: string;
     dosage: string;
+    route?: string;
     frequency: string;
     duration: string;
     instructions?: string;
@@ -82,29 +92,36 @@ interface Props {
     onEdit: () => void;
     onAddNew: () => void;
     onSendEmail: () => void;
+    autoPrint?: boolean;
+    autoDownload?: boolean;
 }
 
 /* ── Component ── */
-export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, onAddNew, onSendEmail }: Props) {
+export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, onAddNew, onSendEmail, autoPrint, autoDownload }: Props) {
     const printRef = useRef<HTMLDivElement>(null);
 
     const handleDownloadPdf = async () => {
         if (!printRef.current) return;
-        const canvas = await html2canvas(printRef.current, { scale: 2, useCORS: true, allowTaint: true });
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save(`PRESCRIPTION_${prescription.patient.full_name}.pdf`);
+        await exportElementToPdf(printRef.current, `PRESCRIPTION_${prescription.patient?.full_name || 'RECORD'}.pdf`);
     };
 
-    const isMeki = prescription.doctor.full_name.toLowerCase().includes('meki') || prescription.doctor.qualifications?.includes('229812');
-    const docName = isMeki ? "DR S. C. MEKI" : `DR. ${prescription.doctor.full_name.replace(/^dr\.?\s+/i, '').toUpperCase()}`;
-    const docSpecialty = isMeki ? "Specialist Urologist" : prescription.doctor.specialization;
+    useEffect(() => {
+        if (autoPrint) {
+            const timer = setTimeout(() => window.print(), 400);
+            return () => clearTimeout(timer);
+        }
+        if (autoDownload) {
+            const timer = setTimeout(() => handleDownloadPdf(), 400);
+            return () => clearTimeout(timer);
+        }
+    }, [autoPrint, autoDownload]);
+
+    const isMeki = !prescription.doctor || prescription.doctor.full_name?.toLowerCase().includes('meki') || prescription.doctor.qualifications?.includes('229812');
+    const docName = isMeki ? "DR S. C. MEKI" : `DR. ${(prescription.doctor?.full_name || 'S. C. MEKI').replace(/^dr\.?\s+/i, '').toUpperCase()}`;
+    const docSpecialty = isMeki ? "Specialist Urologist" : (prescription.doctor?.specialization || "Consultant Urologist");
     const docQuals = isMeki
         ? ["MMED (UZ) Endourology (UCU)", "AFHOZ: 229812", "MDPCZ: SU700212"]
-        : (prescription.doctor.qualifications ? prescription.doctor.qualifications.split(/[\n,]+/).map((s: string) => s.trim()) : []);
+        : (prescription.doctor?.qualifications ? prescription.doctor.qualifications.split(/[\n,]+/).map((s: string) => s.trim()) : ["MMED (UZ) Endourology (UCU)", "AFHOZ: 229812", "MDPCZ: SU700212"]);
 
     const logoSrc = branch.logo_url || branch.signature_url;
 
@@ -112,19 +129,27 @@ export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, on
         <div className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col md:flex-row gap-6 items-start justify-center">
             <style>{`
                 @media print {
+                    @page {
+                        size: A4 portrait;
+                        margin: 10mm;
+                    }
+                    body {
+                        background: #ffffff !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
                     .print-no-padding {
                         padding: 0 !important;
                         border: none !important;
                         box-shadow: none !important;
                         background: transparent !important;
+                        width: 100% !important;
+                        min-width: 0 !important;
+                        max-width: 100% !important;
                     }
                     .print-referral-box {
                         border: 1.5px solid black !important;
-                        padding: 28px !important;
-                        min-height: 268mm !important;
-                        display: flex !important;
-                        flex-direction: column !important;
-                        justify-content: space-between !important;
+                        padding: 20px !important;
                         box-sizing: border-box !important;
                     }
                 }
@@ -153,8 +178,8 @@ export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, on
             </div>
 
             {/* ── Document View — identical outer shell to ClinicalDocumentPrintView ── */}
-            <div className="flex-1 max-w-[210mm] order-1 md:order-2">
-                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none print-no-padding">
+            <div className="flex-1 w-full overflow-x-auto order-1 md:order-2 flex justify-center print:block print:w-full">
+                <div ref={printRef} className="bg-white p-[20mm] shadow-lg print:shadow-none print:p-0 text-gray-900 border border-gray-200 print:border-none print-no-padding w-[210mm] min-w-[210mm] print:w-full print:min-w-0 print:max-w-full">
 
                     {/* ── Inner bordered box — exact copy of referral form ── */}
                     <div className="print-referral-box border border-black p-8 flex flex-col justify-between min-h-[258mm] text-xs text-gray-800 leading-relaxed">
@@ -191,9 +216,9 @@ export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, on
                             {/* Patient info — same style as referral's metadata block */}
                             <div className="space-y-1">
                                 <p><b>Date:</b> {formatDate(prescription.prescription_date || prescription.created_at)}</p>
-                                <p className="mt-2"><b>Patient Name:</b> {prescription.patient.full_name}</p>
-                                <p><b>Gender:</b> {prescription.patient.gender}</p>
-                                <p><b>D.O.B:</b> {formatDate(prescription.patient.date_of_birth)}</p>
+                                <p className="mt-2"><b>Patient Name:</b> {prescription.patient?.full_name || 'N/A'}</p>
+                                <p><b>Gender:</b> {prescription.patient?.gender || 'N/A'}</p>
+                                <p><b>D.O.B:</b> {formatDate(prescription.patient?.date_of_birth)}</p>
                             </div>
 
                             {/* Drugs section heading */}
@@ -213,16 +238,19 @@ export function PrescriptionPrintView({ prescription, branch, onBack, onEdit, on
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {prescription.items.map((item) => {
+                                        {(prescription.items || []).map((item) => {
                                             const p = parseAdvice(item.instructions || (item as any).advice);
+                                            const dosage = item.dosage || p.dosage || '—';
+                                            const route = item.route || p.route || '—';
+                                            const freq = item.frequency || p.frequency || '—';
                                             return (
                                                 <tr key={item.id} className="border-b">
                                                     <td className="px-3 py-2 font-semibold text-gray-900">{item.medicine_name}</td>
-                                                    <td className="px-3 py-2">{p.dosage || item.dosage}</td>
-                                                    <td className="px-3 py-2">{p.route}</td>
-                                                    <td className="px-3 py-2">{p.frequency || item.frequency}</td>
+                                                    <td className="px-3 py-2">{dosage}</td>
+                                                    <td className="px-3 py-2">{route}</td>
+                                                    <td className="px-3 py-2">{freq}</td>
                                                     <td className="px-3 py-2">{item.duration}</td>
-                                                    <td className="px-3 py-2 text-gray-500">{p.advice}</td>
+                                                    <td className="px-3 py-2 text-gray-500">{renderHtmlOrText(p.advice)}</td>
                                                 </tr>
                                             );
                                         })}

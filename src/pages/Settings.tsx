@@ -154,24 +154,51 @@ export function Settings() {
   const handleEmailConfigSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profile?.branch_id) return;
+    
+    if (emailConfig.smtp_host && emailConfig.smtp_host.includes('@')) {
+      setMessage({
+        type: 'error',
+        text: `Invalid SMTP Host ("${emailConfig.smtp_host}"): SMTP Host must be a server domain name (e.g. mail.globalhunterstech.com or smtp.gmail.com), not an email address with '@'.`
+      });
+      return;
+    }
+
     setSavingEmail(true);
     setMessage(null);
 
     try {
-      const { error } = await supabase
+      const { data: existing } = await supabase
         .from('system_configurations')
-        .upsert({
-          branch_id: profile.branch_id,
-          config_type: 'email',
-          config_name: 'smtp',
-          config_data: emailConfig,
-          updated_by: user?.id,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'branch_id,config_type,config_name'
-        });
+        .select('id')
+        .eq('branch_id', profile.branch_id)
+        .eq('config_type', 'email')
+        .eq('config_name', 'smtp')
+        .maybeSingle();
 
-      if (error) throw error;
+      const payload = {
+        branch_id: profile.branch_id,
+        config_type: 'email',
+        config_name: 'smtp',
+        config_data: emailConfig,
+        updated_by: user?.id,
+        updated_at: new Date().toISOString()
+      };
+
+      let saveError;
+      if (existing?.id) {
+        const { error } = await supabase
+          .from('system_configurations')
+          .update(payload)
+          .eq('id', existing.id);
+        saveError = error;
+      } else {
+        const { error } = await supabase
+          .from('system_configurations')
+          .insert([{ ...payload, created_by: user?.id }]);
+        saveError = error;
+      }
+
+      if (saveError) throw saveError;
 
       setMessage({ type: 'success', text: 'Email configuration saved successfully!' });
     } catch (error: any) {
@@ -183,6 +210,14 @@ export function Settings() {
   };
 
   const handleTestEmail = async () => {
+    if (emailConfig.smtp_host && emailConfig.smtp_host.includes('@')) {
+      setMessage({
+        type: 'error',
+        text: `Invalid SMTP Host ("${emailConfig.smtp_host}"): SMTP Host must be a server domain name (e.g. mail.globalhunterstech.com or smtp.gmail.com), not an email address with '@'.`
+      });
+      return;
+    }
+
     const recipient = testRecipient || emailConfig.from_email;
     if (!recipient) {
       setMessage({ type: 'error', text: 'Please enter a test recipient email or configure a "From Email".' });
@@ -216,7 +251,14 @@ If you received this, your email configuration is working correctly.`,
       }
     } catch (error: any) {
       console.error('Test email error caught in UI:', error);
-      setMessage({ type: 'error', text: `Test failed: ${error.message}` });
+      if (error.message?.toLowerCase().includes('ratelimit') || error.message?.includes('451')) {
+        setMessage({
+          type: 'error',
+          text: 'Hostinger Rate Limit Exceeded (451): Hostinger has temporarily throttled outgoing emails for this mailbox due to rapid test attempts. Your SMTP configuration settings are correct! Please wait 15–30 minutes for Hostinger\'s rate limit window to reset.'
+        });
+      } else {
+        setMessage({ type: 'error', text: `Test failed: ${error.message}` });
+      }
     } finally {
       setTestingEmail(false);
     }
@@ -479,9 +521,12 @@ If you received this, your email configuration is working correctly.`,
                 value={emailConfig.smtp_host}
                 onChange={(e) => setEmailConfig({ ...emailConfig, smtp_host: e.target.value })}
                 className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="smtp.gmail.com"
+                placeholder="mail.globalhunterstech.com or smtp.gmail.com"
                 required
               />
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                Enter your mail server hostname (e.g. <code className="text-blue-600 dark:text-blue-400">mail.globalhunterstech.com</code> or <code className="text-blue-600 dark:text-blue-400">smtp.gmail.com</code>). Do not enter an email address with '@'.
+              </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">SMTP Port</label>
